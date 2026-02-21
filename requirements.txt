@@ -1,0 +1,21 @@
+# Geometric Visualization Pipeline – dependencies
+#
+# Install with:   pip install -r requirements.txt
+#
+# GPU acceleration (optional but strongly recommended for large models):
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+#
+# Minimum Python version: 3.10
+
+# ── Core ML / model loading ───────────────────────────────────────────────
+torch>=2.0.0
+transformers>=4.35.0
+accelerate>=0.24.0          # optional: required for device_map='auto' on multi-GPU
+
+# ── Dimensionality reduction ──────────────────────────────────────────────
+scikit-learn>=1.3.0
+umap-learn>=0.5.4           # UMAP; also installs numba, pynndescent
+
+# ── Numerics & plotting ───────────────────────────────────────────────────
+numpy>=1.24.0
+matplotlib>=3.7.0
