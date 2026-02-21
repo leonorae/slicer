@@ -12,6 +12,8 @@ import re
 from pathlib import Path
 from typing import Dict, Optional
 
+import matplotlib
+matplotlib.use("Agg")  # force non-interactive backend before pyplot is imported
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import numpy as np
