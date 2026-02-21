@@ -180,10 +180,21 @@ class GeometryVisualizer:
                 idx = rng.choice(len(arr), max_points, replace=False)
                 arr = arr[idx]
 
-            # Color by point density via a simple position-in-array proxy
             color = cmap(i / max(n - 1, 1))
             ax.scatter(arr[:, 0], arr[:, 1], c=[color], s=3, alpha=0.4,
                        linewidths=0, rasterized=True)
+
+            # Clip axes to 2nd–98th percentile so the outlier dimension
+            # (one massive direction in GPT-2's residual stream) doesn't
+            # compress the main cloud into a single dot.
+            for axis_data, set_lim in (
+                (arr[:, 0], ax.set_xlim),
+                (arr[:, 1], ax.set_ylim),
+            ):
+                lo, hi = np.percentile(axis_data, [2, 98])
+                margin = max((hi - lo) * 0.1, abs(hi) * 0.05, 1e-3)
+                set_lim(lo - margin, hi + margin)
+
             m = re.search(r"layer_(\d+)", key)
             ax.set_title(f"Layer {m.group(1)}" if m else key, fontsize=9)
             ax.set_xlabel("PC1", fontsize=7)
