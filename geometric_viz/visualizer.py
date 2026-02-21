@@ -184,16 +184,19 @@ class GeometryVisualizer:
             ax.scatter(arr[:, 0], arr[:, 1], c=[color], s=3, alpha=0.4,
                        linewidths=0, rasterized=True)
 
-            # Clip axes to 2nd–98th percentile so the outlier dimension
-            # (one massive direction in GPT-2's residual stream) doesn't
-            # compress the main cloud into a single dot.
+            # Clip axes using Tukey's 3×IQR fence.
+            # Percentile-based clipping (e.g. 2–98%) keeps outlier tokens
+            # visible if they constitute >2% of the data.  The IQR fence
+            # anchors to the bulk of the distribution regardless of how many
+            # outlier tokens exist.
             for axis_data, set_lim in (
                 (arr[:, 0], ax.set_xlim),
                 (arr[:, 1], ax.set_ylim),
             ):
-                lo, hi = np.percentile(axis_data, [2, 98])
-                margin = max((hi - lo) * 0.1, abs(hi) * 0.05, 1e-3)
-                set_lim(lo - margin, hi + margin)
+                q1, q3 = np.percentile(axis_data, [25, 75])
+                iqr = q3 - q1
+                margin = max(iqr * 0.15, 1e-3)
+                set_lim(q1 - 3.0 * iqr - margin, q3 + 3.0 * iqr + margin)
 
             m = re.search(r"layer_(\d+)", key)
             ax.set_title(f"Layer {m.group(1)}" if m else key, fontsize=9)

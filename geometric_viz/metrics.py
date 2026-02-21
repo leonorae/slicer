@@ -182,6 +182,7 @@ def compute_position_dependence(
     -------
     dict with position_r2_mean, position_r2_std, n_tokens_used
     """
+    from sklearn.decomposition import PCA as _PCA
     from sklearn.linear_model import Ridge
     from sklearn.model_selection import cross_val_score
     from sklearn.preprocessing import StandardScaler
@@ -197,14 +198,34 @@ def compute_position_dependence(
         idx = rng.choice(len(X), max_tokens, replace=False)
         X, y = X[idx], y[idx]
 
+    n = len(X)
+
+    # Reduce dimensionality before regression.
+    # Ridge on raw 768-dim features is severely underdetermined when n < p
+    # (common with default prompt sets).  Projecting to top-K PCA components
+    # ensures n >> p and stabilises the cross-validated R² estimate.
+    # We also skip the first PC: in GPT-2 it captures the "outlier dimension"
+    # (a near-constant large-magnitude direction that carries no positional
+    # signal but dominates the variance and destabilises the regression).
+    n_components = min(48, n // 10)   # keep n ≥ 10 × p
+    if n_components < 2:
+        return {"error": f"too few tokens ({n}) for reliable position R²; need ≥ 20"}
+
     scaler = StandardScaler()
     X_s = scaler.fit_transform(X)
 
-    model = Ridge(alpha=1.0)
-    scores = cross_val_score(model, X_s, y, cv=5, scoring="r2", n_jobs=-1)
+    pca_dim = _PCA(n_components=n_components + 1, random_state=random_state)
+    X_pca = pca_dim.fit_transform(X_s)[:, 1:]  # drop PC1 (outlier dimension)
+
+    # Scale alpha with sqrt(n) so regularisation adapts to token count.
+    alpha = max(1.0, np.sqrt(n))
+    model = Ridge(alpha=alpha)
+    scores = cross_val_score(model, X_pca, y, cv=5, scoring="r2", n_jobs=-1)
 
     return {
         "position_r2_mean": float(np.mean(scores)),
         "position_r2_std": float(np.std(scores)),
-        "n_tokens_used": int(len(X)),
+        "n_tokens_used": int(n),
+        "n_pca_components": int(n_components),
+        "ridge_alpha": float(alpha),
     }
