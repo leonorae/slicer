@@ -318,10 +318,15 @@ class ActivationExtractor:
         # ------------------------------------------------------------------
         activations_full: Dict[str, np.ndarray] = {}
         for key, tensors in self._raw.items():
-            # Each tensor: (batch, seq_len, hidden); concat along batch dim
-            cat = torch.cat(tensors, dim=0)            # (total_seqs, max_seq_len, hidden)
-            B, S, H = cat.shape
-            activations_full[key] = cat.reshape(B * S, H).numpy()
+            # Each tensor has shape (batch, seq_len, hidden).  Different batches
+            # may have different seq_len (padding to the longest sequence in that
+            # batch), so we cannot torch.cat across batches on dim=0.  Instead,
+            # flatten each batch individually then np.vstack.
+            flat_parts = []
+            for t in tensors:
+                B, S, H = t.shape
+                flat_parts.append(t.reshape(B * S, H).numpy())
+            activations_full[key] = np.concatenate(flat_parts, axis=0)
 
         activations = self._subsample(activations_full)
 
