@@ -190,8 +190,25 @@ def compute_position_dependence(
     if not per_seq_acts:
         return {"error": "no per-sequence activations provided"}
 
-    X = np.vstack(per_seq_acts)
-    y = np.concatenate(per_seq_positions).astype(float)
+    # Use relative position [0, 1] within each sequence instead of absolute
+    # indices.  Absolute indices (0…seq_len−1) create incompatible y-ranges
+    # across CV folds: a fold whose test set contains long sequences but
+    # whose training set has only short ones predicts ŷ≈30 for tokens at
+    # y=200, driving R² to large negative values.  Relative position is
+    # scale-invariant across sequence lengths.
+    X_parts, y_parts = [], []
+    for acts, pos in zip(per_seq_acts, per_seq_positions):
+        if len(pos) == 0:
+            continue
+        rel = pos.astype(float) / max(float(len(pos) - 1), 1.0)
+        X_parts.append(acts)
+        y_parts.append(rel)
+
+    if not X_parts:
+        return {"error": "no per-sequence activations provided"}
+
+    X = np.vstack(X_parts)
+    y = np.concatenate(y_parts)
 
     if len(X) > max_tokens:
         rng = np.random.default_rng(random_state)
@@ -200,24 +217,18 @@ def compute_position_dependence(
 
     n = len(X)
 
-    # Reduce dimensionality before regression.
-    # Ridge on raw 768-dim features is severely underdetermined when n < p
-    # (common with default prompt sets).  Projecting to top-K PCA components
-    # ensures n >> p and stabilises the cross-validated R² estimate.
-    # We also skip the first PC: in GPT-2 it captures the "outlier dimension"
-    # (a near-constant large-magnitude direction that carries no positional
-    # signal but dominates the variance and destabilises the regression).
-    n_components = min(48, n // 10)   # keep n ≥ 10 × p
+    # Reduce to top-K PCA components so n >> p (ridge is underdetermined
+    # when raw 768-dim features outnumber training samples per fold).
+    n_components = min(48, n // 10)
     if n_components < 2:
         return {"error": f"too few tokens ({n}) for reliable position R²; need ≥ 20"}
 
     scaler = StandardScaler()
     X_s = scaler.fit_transform(X)
 
-    pca_dim = _PCA(n_components=n_components + 1, random_state=random_state)
-    X_pca = pca_dim.fit_transform(X_s)[:, 1:]  # drop PC1 (outlier dimension)
+    pca_dim = _PCA(n_components=n_components, random_state=random_state)
+    X_pca = pca_dim.fit_transform(X_s)
 
-    # Scale alpha with sqrt(n) so regularisation adapts to token count.
     alpha = max(1.0, np.sqrt(n))
     model = Ridge(alpha=alpha)
     scores = cross_val_score(model, X_pca, y, cv=5, scoring="r2", n_jobs=-1)

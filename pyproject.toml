@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "geometric-viz"
+version = "0.1.0"
+description = "Geometric Visualization Pipeline for transformer latent spaces"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    # Core ML / model loading
+    "torch>=2.0.0",
+    "transformers>=4.35.0",
+    "accelerate>=0.24.0",       # required for device_map='auto' on multi-GPU
+    # Dimensionality reduction
+    "scikit-learn>=1.3.0",
+    "umap-learn>=0.5.4",        # also installs numba, pynndescent
+    # Numerics & plotting
+    "numpy>=1.24.0",
+    "matplotlib>=3.7.0",
+]
+
+[project.scripts]
+geometric-viz = "run_pipeline:main"
+
+[tool.uv]
+# GPU wheels: override the torch index when installing on CUDA machines.
+# Example: uv sync --extra-index-url https://download.pytorch.org/whl/cu121
