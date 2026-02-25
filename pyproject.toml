@@ -21,8 +21,17 @@ dependencies = [
     "matplotlib>=3.7.0",
 ]
 
+[project.optional-dependencies]
+microscope = [
+    "open-clip-torch>=2.24.0",  # CLIP embedding extraction
+    "diffusers>=0.25.0",        # Stable Diffusion pipeline
+    "Pillow>=10.0.0",           # image grid composition
+    "lpips>=0.1.4",             # perceptual similarity (optional analysis)
+]
+
 [project.scripts]
 geometric-viz = "run_pipeline:main"
+diffusion-microscope = "run_microscope:main"
 
 [tool.uv]
 # GPU wheels: override the torch index when installing on CUDA machines.
