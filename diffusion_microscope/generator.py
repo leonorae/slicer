@@ -49,7 +49,14 @@ class DiffusionMicroscope:
             return
 
         import torch
-        from diffusers import StableDiffusionPipeline
+        try:
+            from diffusers import StableDiffusionPipeline
+        except ImportError:
+            raise ImportError(
+                "diffusers is required for image generation.\n"
+                "Install it with:  uv pip install diffusers --system\n"
+                "or:               uv sync --extra microscope"
+            ) from None
 
         torch_dtype = getattr(torch, self.dtype)
         self._pipe = StableDiffusionPipeline.from_pretrained(

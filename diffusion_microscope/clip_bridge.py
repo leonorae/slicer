@@ -47,7 +47,14 @@ def extract_clip_text_embeddings(
     -------
     (n_texts, clip_dim) float32 array of text embeddings
     """
-    import open_clip
+    try:
+        import open_clip
+    except ImportError:
+        raise ImportError(
+            "open-clip-torch is required for CLIP embedding extraction.\n"
+            "Install it with:  uv pip install open-clip-torch --system\n"
+            "or:               uv sync --extra microscope"
+        ) from None
     import torch
 
     model, _, _ = open_clip.create_model_and_transforms(
