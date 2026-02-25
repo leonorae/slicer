@@ -37,9 +37,9 @@ class MicroscopePipeline:
     def __init__(
         self,
         llm_model_name: str = "gpt2",
-        sd_model_id: str = "stabilityai/stable-diffusion-2-1",
-        clip_model_name: str = "ViT-H-14",
-        clip_pretrained: str = "laion2b_s32b_b79k",
+        sd_model_id: str = "sd-legacy/stable-diffusion-v1-5",
+        clip_model_name: str = "ViT-L-14",
+        clip_pretrained: str = "openai",
         output_dir: str = "./microscope_outputs",
         device: str = "cpu",
     ):

@@ -111,12 +111,15 @@ def parse_args() -> argparse.Namespace:
     # Models
     p.add_argument("--llm", default="gpt2", help="HuggingFace LLM model name")
     p.add_argument(
-        "--sd", default="stabilityai/stable-diffusion-2-1",
+        "--sd", default="sd-legacy/stable-diffusion-v1-5",
         help="HuggingFace Stable Diffusion model ID",
     )
-    p.add_argument("--clip_model", default="ViT-H-14", help="OpenCLIP architecture")
     p.add_argument(
-        "--clip_pretrained", default="laion2b_s32b_b79k",
+        "--clip_model", default="ViT-L-14",
+        help="OpenCLIP architecture (must match SD's text encoder)",
+    )
+    p.add_argument(
+        "--clip_pretrained", default="openai",
         help="OpenCLIP pretrained weights tag",
     )
 

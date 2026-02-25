@@ -24,8 +24,8 @@ import numpy as np
 
 def extract_clip_text_embeddings(
     texts: list[str],
-    clip_model_name: str = "ViT-H-14",
-    pretrained: str = "laion2b_s32b_b79k",
+    clip_model_name: str = "ViT-L-14",
+    pretrained: str = "openai",
     device: str = "cpu",
     batch_size: int = 32,
 ) -> np.ndarray:

@@ -8,10 +8,10 @@ distances, and interpolations in activation space map faithfully to
 directions in CLIP space.  Any non-linear warping in the resulting images
 is therefore attributable to the diffusion decoder, not the bridge.
 
-Typical dimensions:
+Typical dimensions (default: SD 1.5 / CLIP ViT-L/14):
     GPT-2        768  →  CLIP ViT-L/14   768   (SD 1.5)
-    Llama-2-7B  4096  →  CLIP ViT-H/14  1024   (SD 2.1)
-    Mistral-7B  4096  →  CLIP ViT-H/14  1024   (SD 2.1)
+    Llama-2-7B  4096  →  CLIP ViT-L/14   768   (SD 1.5)
+    Mistral-7B  4096  →  CLIP ViT-L/14   768   (SD 1.5)
 """
 
 from __future__ import annotations

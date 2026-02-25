@@ -34,7 +34,7 @@ class DiffusionMicroscope:
 
     def __init__(
         self,
-        sd_model_id: str = "stabilityai/stable-diffusion-2-1",
+        sd_model_id: str = "sd-legacy/stable-diffusion-v1-5",
         device: str = "cpu",
         dtype: str = "float16",
     ):
