@@ -27,6 +27,8 @@ microscope = [
     "diffusers>=0.25.0",        # Stable Diffusion pipeline
     "Pillow>=10.0.0",           # image grid composition
     "lpips>=0.1.4",             # perceptual similarity (optional analysis)
+    "datasets>=2.14.0",         # HuggingFace datasets (training corpus loader)
+    "nltk>=3.8.0",              # WordNet definitions (training corpus loader)
 ]
 
 [project.scripts]
