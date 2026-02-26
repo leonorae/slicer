@@ -149,15 +149,30 @@ def parse_args() -> argparse.Namespace:
 
     # Projection
     p.add_argument(
+        "--projection_mode",
+        choices=["per_layer", "single_layer", "mixed_layer"],
+        default="per_layer",
+        help=(
+            "How to train the LLM→CLIP projection (default: per_layer).\n"
+            "  per_layer   — one Ridge map per layer, each fit to its own distribution\n"
+            "  single_layer — one map trained on a single layer (see --target_layer)\n"
+            "  mixed_layer  — one map trained on all layers pooled together"
+        ),
+    )
+    p.add_argument(
+        "--target_layer", type=int, default=None,
+        help="LLM layer to project from in single_layer mode (default: last layer).",
+    )
+    p.add_argument(
         "--alpha", default="auto",
-        help="Ridge regularisation per layer: a float (e.g. 1.0) or 'auto' to "
-             "select per-layer via RidgeCV cross-validation (default: auto)",
+        help="Ridge regularisation: a float (e.g. 1.0) or 'auto' for RidgeCV "
+             "selection (default: auto). Applies to all projection modes.",
     )
     p.add_argument(
         "--load_projection", default=None,
         help="Path to a saved projection directory (skip training). "
              "Accepts both a LayerProjectionSet directory (has index.json) "
-             "and a legacy single-layer LinearProjection directory.",
+             "and a single-layer LinearProjection directory.",
     )
 
     # Generation
@@ -271,6 +286,8 @@ def main() -> None:
         results = pipeline.run(
             training_texts=training_texts,
             probe_texts=probe_texts,
+            projection_mode=args.projection_mode,
+            target_layer=args.target_layer,
             alpha=alpha_arg,
             cfg_scales=cfg_scales,
             cache_dir=args.cache_dir,
@@ -278,15 +295,26 @@ def main() -> None:
         )
 
         val = results["validation"]
-        r2_vals = [m["projection_r2"] for m in val.values()]
-        best_layer = max(val, key=lambda l: val[l]["projection_r2"])
+        mode = results["projection_mode"]
 
         print("\n" + "=" * 60)
         print("Diffusion Microscope — Run Complete")
         print(f"Output directory: {results['run_dir']}")
-        print(f"\nPer-layer R² ({len(val)} layers):")
-        print(f"  min={min(r2_vals):.4f}  max={max(r2_vals):.4f}  "
-              f"best=layer {best_layer} ({val[best_layer]['projection_r2']:.4f})")
+        print(f"Projection mode : {mode}")
+
+        if mode == "per_layer":
+            r2_vals = [m["projection_r2"] for m in val.values()]
+            best_layer = max(val, key=lambda l: val[l]["projection_r2"])
+            print(f"\nPer-layer R² ({len(val)} layers):")
+            print(
+                f"  min={min(r2_vals):.4f}  max={max(r2_vals):.4f}  "
+                f"best=layer {best_layer} ({val[best_layer]['projection_r2']:.4f})"
+            )
+        else:
+            print(
+                f"\nValidation: R²={val['projection_r2']:.4f}  "
+                f"cosine_dist={val['cosine_dist_mean']:.4f}"
+            )
 
 
 if __name__ == "__main__":

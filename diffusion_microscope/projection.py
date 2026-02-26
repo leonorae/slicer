@@ -23,6 +23,29 @@ from typing import Dict, List, Optional, Union
 import numpy as np
 
 
+# Alpha grid used by RidgeCV when alpha="auto" for any projection type.
+_ALPHA_GRID: List[float] = [0.01, 0.1, 1.0, 10.0, 100.0, 1000.0]
+
+
+def _auto_alpha(X_train: np.ndarray, y_train: np.ndarray) -> float:
+    """
+    Select the best Ridge alpha for (X_train, y_train) via RidgeCV LOO-CV.
+
+    X_train is z-scored internally so the selected alpha is comparable across
+    layers with different activation magnitudes.
+    """
+    from sklearn.linear_model import RidgeCV
+
+    mean = X_train.mean(axis=0)
+    scale = X_train.std(axis=0)
+    scale[scale < 1e-8] = 1.0
+    X_norm = (X_train - mean) / scale
+
+    rcv = RidgeCV(alphas=_ALPHA_GRID, scoring="r2")
+    rcv.fit(X_norm, y_train)
+    return float(rcv.alpha_)
+
+
 class LinearProjection:
     """
     Affine map  LLM activation → CLIP embedding  trained with Ridge regression.
@@ -258,9 +281,6 @@ class LayerProjectionSet:
             over a log-spaced grid.
     """
 
-    #: Alpha candidates tried when alpha="auto".
-    ALPHA_GRID: List[float] = [0.01, 0.1, 1.0, 10.0, 100.0, 1000.0]
-
     def __init__(self, alpha: Union[float, str] = 1.0):
         self.alpha = alpha
         self.projections: Dict[int, LinearProjection] = {}
@@ -335,16 +355,7 @@ class LayerProjectionSet:
         self, X_train: np.ndarray, y_train: np.ndarray
     ) -> float:
         """Pick the best alpha via RidgeCV (leave-one-out) on z-scored X."""
-        from sklearn.linear_model import RidgeCV
-
-        mean = X_train.mean(axis=0)
-        scale = X_train.std(axis=0)
-        scale[scale < 1e-8] = 1.0
-        X_norm = (X_train - mean) / scale
-
-        rcv = RidgeCV(alphas=self.ALPHA_GRID, scoring="r2")
-        rcv.fit(X_norm, y_train)
-        return float(rcv.alpha_)
+        return _auto_alpha(X_train, y_train)
 
     # ------------------------------------------------------------------
     # Inference
