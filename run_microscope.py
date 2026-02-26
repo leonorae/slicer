@@ -129,6 +129,20 @@ def parse_args() -> argparse.Namespace:
         help="File with one training text per line (default: built-in set)",
     )
     p.add_argument(
+        "--auto_corpus", action="store_true",
+        help="Download a diverse training corpus from public HF datasets instead "
+             "of using the small built-in set.",
+    )
+    p.add_argument(
+        "--n_train", type=int, default=5000,
+        help="Number of training texts when --auto_corpus is set (default: 5000).",
+    )
+    p.add_argument(
+        "--corpus_sources", default="coco,wikipedia,cc3m,wordnet",
+        help="Comma-separated corpus sources for --auto_corpus. "
+             "Available: coco, wikipedia, cc3m, wordnet",
+    )
+    p.add_argument(
         "--probe", action="append", default=None,
         help="Text to visualise (repeatable). If none given, uses defaults.",
     )
@@ -185,6 +199,20 @@ def main() -> None:
             l.strip() for l in texts_path.read_text().splitlines() if l.strip()
         ]
         print(f"Loaded {len(training_texts)} training texts from {texts_path}")
+    elif args.auto_corpus:
+        from diffusion_microscope.training_data import load_training_corpus, ALL_SOURCES
+        sources_raw = [s.strip() for s in args.corpus_sources.split(",") if s.strip()]
+        bad = [s for s in sources_raw if s not in ALL_SOURCES]
+        if bad:
+            print(f"Error: unknown corpus sources: {bad}. "
+                  f"Valid: {list(ALL_SOURCES)}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Building auto corpus: n={args.n_train}, sources={sources_raw}")
+        training_texts = load_training_corpus(
+            n_total=args.n_train,
+            sources=tuple(sources_raw),
+            seed=args.seed,
+        )
     else:
         training_texts = DEFAULT_TRAINING_TEXTS
         print(f"Using {len(training_texts)} built-in training texts")

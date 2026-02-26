@@ -20,5 +20,6 @@ pipeline      : end-to-end orchestration
 
 from .projection import LinearProjection
 from .pipeline import MicroscopePipeline
+from .training_data import load_training_corpus, ALL_SOURCES
 
-__all__ = ["LinearProjection", "MicroscopePipeline"]
+__all__ = ["LinearProjection", "MicroscopePipeline", "load_training_corpus", "ALL_SOURCES"]
