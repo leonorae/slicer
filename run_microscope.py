@@ -148,14 +148,16 @@ def parse_args() -> argparse.Namespace:
     )
 
     # Projection
-    p.add_argument("--alpha", type=float, default=1.0, help="Ridge regularisation")
     p.add_argument(
-        "--target_layer", type=int, default=None,
-        help="LLM layer to project from (default: last layer)",
+        "--alpha", default="auto",
+        help="Ridge regularisation per layer: a float (e.g. 1.0) or 'auto' to "
+             "select per-layer via RidgeCV cross-validation (default: auto)",
     )
     p.add_argument(
         "--load_projection", default=None,
-        help="Path to a saved projection directory (skip training)",
+        help="Path to a saved projection directory (skip training). "
+             "Accepts both a LayerProjectionSet directory (has index.json) "
+             "and a legacy single-layer LinearProjection directory.",
     )
 
     # Generation
@@ -234,11 +236,26 @@ def main() -> None:
         device=device,
     )
 
+    # Parse alpha: keep as "auto" string or convert to float
+    alpha_arg = args.alpha
+    if alpha_arg != "auto":
+        try:
+            alpha_arg = float(alpha_arg)
+        except ValueError:
+            print(
+                f"Error: --alpha must be a float or 'auto', got: {args.alpha!r}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
     if args.load_projection:
         # Skip training — load existing projection and just generate
-        from diffusion_microscope.projection import LinearProjection
+        from diffusion_microscope.projection import LinearProjection, LayerProjectionSet
 
-        proj = LinearProjection.load(args.load_projection)
+        if LayerProjectionSet.is_saved_at(args.load_projection):
+            proj = LayerProjectionSet.load(args.load_projection)
+        else:
+            proj = LinearProjection.load(args.load_projection)
         print(f"Loaded projection: {proj}")
 
         data = pipeline.prepare_training_data(
@@ -254,19 +271,22 @@ def main() -> None:
         results = pipeline.run(
             training_texts=training_texts,
             probe_texts=probe_texts,
-            target_layer=args.target_layer,
-            alpha=args.alpha,
+            alpha=alpha_arg,
             cfg_scales=cfg_scales,
             cache_dir=args.cache_dir,
             seed=args.seed,
         )
 
+        val = results["validation"]
+        r2_vals = [m["projection_r2"] for m in val.values()]
+        best_layer = max(val, key=lambda l: val[l]["projection_r2"])
+
         print("\n" + "=" * 60)
         print("Diffusion Microscope — Run Complete")
         print(f"Output directory: {results['run_dir']}")
-        print(f"\nValidation:")
-        for k, v in results["validation"].items():
-            print(f"  {k}: {v:.4f}" if isinstance(v, float) else f"  {k}: {v}")
+        print(f"\nPer-layer R² ({len(val)} layers):")
+        print(f"  min={min(r2_vals):.4f}  max={max(r2_vals):.4f}  "
+              f"best=layer {best_layer} ({val[best_layer]['projection_r2']:.4f})")
 
 
 if __name__ == "__main__":

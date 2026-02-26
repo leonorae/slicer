@@ -154,7 +154,63 @@ class MicroscopePipeline:
         }
 
     # ------------------------------------------------------------------
-    # Phase 2 + 3: Train and validate projection
+    # Phase 2 + 3a: Train one projection per layer (recommended)
+    # ------------------------------------------------------------------
+
+    def train_layer_projections(
+        self,
+        data: dict,
+        *,
+        alpha: str = "auto",
+        val_fraction: float = 0.15,
+    ) -> dict:
+        """
+        Train a separate LinearProjection for every LLM layer.
+
+        Each layer gets its own Ridge map trained against the same paired CLIP
+        targets.  ``alpha="auto"`` selects the best regularisation per layer via
+        RidgeCV cross-validation, which is especially useful because early layers
+        typically need stronger regularisation than the final layer.
+
+        Parameters
+        ----------
+        data         : output of prepare_training_data()
+        alpha        : per-layer regularisation — float or ``"auto"``
+        val_fraction : held-out fraction for per-layer validation
+
+        Returns
+        -------
+        dict with:
+            projection_set : LayerProjectionSet (one projection per layer)
+            validation     : {layer_idx: metrics_dict}
+        """
+        from .projection import LayerProjectionSet
+
+        llm_acts = data["llm_activations"]
+        clip_embs = data["clip_embeddings"]
+
+        n_layers = len(llm_acts)
+        print(
+            f"[Microscope] Training per-layer projections: "
+            f"{n_layers} layers, alpha={alpha!r}",
+            flush=True,
+        )
+
+        lps = LayerProjectionSet(alpha=alpha)
+        val_metrics = lps.fit(llm_acts, clip_embs, val_fraction=val_fraction)
+
+        r2_vals = [m["projection_r2"] for m in val_metrics.values()]
+        best_layer = max(val_metrics, key=lambda l: val_metrics[l]["projection_r2"])
+        print(
+            f"[Microscope] R² range: {min(r2_vals):.4f} → {max(r2_vals):.4f} "
+            f"(best: layer {best_layer}  R²={val_metrics[best_layer]['projection_r2']:.4f})",
+            flush=True,
+        )
+
+        return {"projection_set": lps, "validation": val_metrics}
+
+    # ------------------------------------------------------------------
+    # Phase 2 + 3b: Train and validate a single-layer projection (legacy)
     # ------------------------------------------------------------------
 
     def train_projection(
@@ -399,21 +455,20 @@ class MicroscopePipeline:
         training_texts: list[str],
         probe_texts: list[str],
         *,
-        target_layer: Optional[int] = None,
-        alpha: float = 1.0,
+        alpha: str = "auto",
         cfg_scales: Sequence[float] = (3.0, 7.0, 12.0),
         cache_dir: Optional[str] = None,
         seed: int = 42,
     ) -> dict:
         """
-        Full pipeline: extract → train projection → validate → generate.
+        Full pipeline: extract → train per-layer projections → validate → generate.
 
         Parameters
         ----------
-        training_texts : texts for training the projection (~5k recommended)
+        training_texts : texts for training (~5k recommended)
         probe_texts    : texts to visualise via layer sweeps
-        target_layer   : LLM layer to project from (default: last)
-        alpha          : Ridge regularisation
+        alpha          : Ridge regularisation per layer, or ``"auto"`` to select
+                         via cross-validation (recommended)
         cfg_scales     : SD guidance scales to sweep
         cache_dir      : cache extracted activations here
         """
@@ -422,48 +477,54 @@ class MicroscopePipeline:
         run_dir.mkdir(parents=True, exist_ok=True)
 
         # Phase 1: data
-        data = self.prepare_training_data(
-            training_texts, cache_dir=cache_dir,
-        )
+        data = self.prepare_training_data(training_texts, cache_dir=cache_dir)
 
-        # Phase 2+3: train + validate
-        train_result = self.train_projection(
-            data, target_layer=target_layer, alpha=alpha,
-        )
-        proj = train_result["projection"]
-        proj.save(str(run_dir / "projection"))
+        # Phase 2+3: train one projection per layer
+        train_result = self.train_layer_projections(data, alpha=alpha)
+        proj_set = train_result["projection_set"]
+        proj_set.save(str(run_dir / "projection_set"))
 
         # Phase 4: generate for each probe text
         sweep_results = []
         for i, text in enumerate(probe_texts):
-            print(f"\n[Microscope] === Probe {i+1}/{len(probe_texts)}: "
-                  f"{text[:60]}{'…' if len(text)>60 else ''} ===")
+            print(
+                f"\n[Microscope] === Probe {i+1}/{len(probe_texts)}: "
+                f"{text[:60]}{'…' if len(text) > 60 else ''} ===",
+                flush=True,
+            )
             sweep_dir = str(run_dir / f"probe_{i:03d}")
             result = self.generate_layer_sweep(
-                text, proj, data,
+                text, proj_set, data,
                 cfg_scales=cfg_scales, seed=seed, save_dir=sweep_dir,
             )
             sweep_results.append(result)
 
-        # Save summary
+        # Save summary — per-layer validation condensed to avoid huge JSON
+        layer_summary = {
+            str(l): {
+                "projection_r2": round(m["projection_r2"], 5),
+                "cosine_dist_mean": round(m["cosine_dist_mean"], 5),
+                "alpha": m["alpha"],
+            }
+            for l, m in train_result["validation"].items()
+        }
         summary = {
             "llm_model": self.llm_model_name,
             "sd_model": self.sd_model_id,
             "clip_model": f"{self.clip_model_name}/{self.clip_pretrained}",
-            "target_layer": train_result["layer"],
             "alpha": alpha,
             "n_training_texts": len(training_texts),
             "n_probe_texts": len(probe_texts),
-            "validation": train_result["validation"],
+            "per_layer_validation": layer_summary,
             "probe_texts": probe_texts,
         }
         with open(run_dir / "summary.json", "w") as f:
             json.dump(summary, f, indent=2, default=str)
 
-        print(f"\n[Microscope] Run complete → {run_dir}")
+        print(f"\n[Microscope] Run complete → {run_dir}", flush=True)
         return {
             "run_dir": str(run_dir),
-            "projection": proj,
+            "projection_set": proj_set,
             "validation": train_result["validation"],
             "sweeps": sweep_results,
         }

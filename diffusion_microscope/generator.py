@@ -176,11 +176,19 @@ class DiffusionMicroscope:
         -------
         dict mapping (layer_idx, cfg_scale) → PIL.Image
         """
+        # Support both a single LinearProjection (applied to every layer) and a
+        # LayerProjectionSet (each layer gets its own trained map).
+        per_layer = hasattr(projection, "projections")
+
         images = {}
         total = len(layer_activations) * len(cfg_scales)
         n = 0
         for layer_idx, act in sorted(layer_activations.items()):
-            clip_vec = projection.transform(act)
+            clip_vec = (
+                projection.transform(layer_idx, act)
+                if per_layer
+                else projection.transform(act)
+            )
             for cfg in cfg_scales:
                 n += 1
                 print(

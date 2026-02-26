@@ -18,8 +18,14 @@ generator     : generate images from projected activations via Stable Diffusion
 pipeline      : end-to-end orchestration
 """
 
-from .projection import LinearProjection
+from .projection import LinearProjection, LayerProjectionSet
 from .pipeline import MicroscopePipeline
 from .training_data import load_training_corpus, ALL_SOURCES
 
-__all__ = ["LinearProjection", "MicroscopePipeline", "load_training_corpus", "ALL_SOURCES"]
+__all__ = [
+    "LinearProjection",
+    "LayerProjectionSet",
+    "MicroscopePipeline",
+    "load_training_corpus",
+    "ALL_SOURCES",
+]
