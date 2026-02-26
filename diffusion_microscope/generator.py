@@ -65,7 +65,6 @@ class DiffusionMicroscope:
             safety_checker=None,
         )
         self._pipe = self._pipe.to(self.device)
-        self._pipe.set_progress_bar_config(disable=True)
 
     # ------------------------------------------------------------------
     # Core generation
@@ -178,9 +177,16 @@ class DiffusionMicroscope:
         dict mapping (layer_idx, cfg_scale) → PIL.Image
         """
         images = {}
+        total = len(layer_activations) * len(cfg_scales)
+        n = 0
         for layer_idx, act in sorted(layer_activations.items()):
             clip_vec = projection.transform(act)
             for cfg in cfg_scales:
+                n += 1
+                print(
+                    f"[SD] Image {n}/{total}  layer={layer_idx}  cfg={cfg:.1f}",
+                    flush=True,
+                )
                 img = self.generate_from_vector(
                     clip_vec,
                     guidance_scale=cfg,
@@ -212,6 +218,7 @@ class DiffusionMicroscope:
         results = []
         for i in range(n_steps):
             alpha = i / max(n_steps - 1, 1)
+            print(f"[SD] Interpolation {i+1}/{n_steps}  alpha={alpha:.2f}", flush=True)
             vec = (1 - alpha) * clip_vec_a + alpha * clip_vec_b
             img = self.generate_from_vector(
                 vec,
