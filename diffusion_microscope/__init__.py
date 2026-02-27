@@ -21,6 +21,7 @@ pipeline      : end-to-end orchestration
 from .projection import LinearProjection, LayerProjectionSet
 from .pipeline import MicroscopePipeline
 from .training_data import load_training_corpus, ALL_SOURCES
+from .experiment import ExperimentRunner
 
 __all__ = [
     "LinearProjection",
@@ -28,4 +29,5 @@ __all__ = [
     "MicroscopePipeline",
     "load_training_corpus",
     "ALL_SOURCES",
+    "ExperimentRunner",
 ]

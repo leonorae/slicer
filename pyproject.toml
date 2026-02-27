@@ -34,6 +34,7 @@ microscope = [
 [project.scripts]
 geometric-viz = "run_pipeline:main"
 diffusion-microscope = "run_microscope:main"
+diffusion-microscope-experiment = "run_experiment:main"
 
 [tool.uv]
 # GPU wheels: override the torch index when installing on CUDA machines.
