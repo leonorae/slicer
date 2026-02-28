@@ -155,6 +155,10 @@ class ActivationExtractor:
 
         # Raw storage: name -> list of (batch, seq_len, hidden) tensors
         self._raw: Dict[str, List[torch.Tensor]] = defaultdict(list)
+        # Per-batch boolean masks: list of (batch*seq_len,) bool arrays
+        # True = real token, False = padding.  One entry per forward-pass batch,
+        # in the same order as the tensors in self._raw.
+        self._masks: List[np.ndarray] = []
         # Real sequence lengths (excluding padding), one per sequence
         self._seq_lengths: List[int] = []
         self._hooks: List = []
@@ -282,6 +286,7 @@ class ActivationExtractor:
             'seq_positions'     : list of (real_seq_len,) position-index arrays
         """
         self._raw.clear()
+        self._masks.clear()
         self._seq_lengths.clear()
         self.register_hooks()
 
@@ -302,14 +307,18 @@ class ActivationExtractor:
                 with torch.no_grad():
                     self.model(**inputs)
 
-                # Record real sequence lengths (sum of attention mask)
+                # Record real sequence lengths and per-batch flat boolean mask
                 attn_mask = inputs.get("attention_mask")
                 if attn_mask is not None:
                     for i in range(attn_mask.shape[0]):
                         self._seq_lengths.append(int(attn_mask[i].sum().item()))
+                    # Flatten (batch, seq_len) -> (batch*seq_len,) bool array
+                    self._masks.append(attn_mask.cpu().bool().numpy().reshape(-1))
                 else:
                     seq_len = inputs["input_ids"].shape[1]
                     self._seq_lengths.extend([seq_len] * len(batch))
+                    B = len(batch)
+                    self._masks.append(np.ones(B * seq_len, dtype=bool))
         finally:
             self.remove_hooks()
 
@@ -318,10 +327,17 @@ class ActivationExtractor:
         # ------------------------------------------------------------------
         activations_full: Dict[str, np.ndarray] = {}
         for key, tensors in self._raw.items():
-            # Each tensor: (batch, seq_len, hidden); concat along batch dim
-            cat = torch.cat(tensors, dim=0)            # (total_seqs, max_seq_len, hidden)
-            B, S, H = cat.shape
-            activations_full[key] = cat.reshape(B * S, H).numpy()
+            # Each tensor has shape (batch, seq_len, hidden).  Different batches
+            # may have different seq_len (padding to the longest sequence in that
+            # batch), so we cannot torch.cat across batches on dim=0.  Instead,
+            # flatten each batch individually, then strip padding rows using the
+            # stored boolean mask, then concatenate the clean parts.
+            flat_parts = []
+            for t, mask in zip(tensors, self._masks):
+                B, S, H = t.shape
+                flat = t.reshape(B * S, H).numpy()
+                flat_parts.append(flat[mask])   # keep only real (non-padding) tokens
+            activations_full[key] = np.concatenate(flat_parts, axis=0)
 
         activations = self._subsample(activations_full)
 

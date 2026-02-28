@@ -160,8 +160,43 @@ class GeometricFertilityPipeline:
                 f"PR={idim['participation_ratio']:.2f}"
             )
 
+        # Warn early if token count is low (affects metric reliability)
+        n_real_tokens = len(per_seq_data["post_mlp_per_seq"]) and sum(
+            len(s) for s in per_seq_data["post_mlp_per_seq"]
+        )
+        if n_real_tokens < 1_000:
+            print(
+                f"[Pipeline] WARNING: only {n_real_tokens} real tokens collected. "
+                "Metrics (especially position R²) will be unreliable. "
+                "Consider adding more/longer prompts or raising --max_length."
+            )
+
         scree_path = viz.plot_pca_scree(pca_results, self.model_name)
         report.add_plot("pca_scree", scree_path)
+
+        pca_scatter_path = viz.plot_pca_scatter(pca_results, self.model_name)
+        report.add_plot("pca_scatter", pca_scatter_path)
+
+        # Positional-embedding helix (GPT-2 / absolute-position models only)
+        wpe_weight = None
+        for attr_path in ["transformer.wpe", "gpt_neox.embed_in"]:
+            try:
+                mod = self.model
+                for part in attr_path.split("."):
+                    mod = getattr(mod, part)
+                if hasattr(mod, "weight"):
+                    wpe_weight = mod.weight.detach().cpu().float().numpy()
+                    break
+            except AttributeError:
+                continue
+
+        if wpe_weight is not None:
+            print("[Pipeline] Generating positional-embedding helix …")
+            helix_path = viz.plot_positional_embedding_helix(wpe_weight, self.model_name)
+            report.add_plot("positional_embedding_helix", helix_path)
+            print(f"[Pipeline] Helix saved: {helix_path}")
+        else:
+            print("[Pipeline] Helix skipped (no wpe.weight found — RoPE model).")
 
         # ── 3. UMAP ────────────────────────────────────────────────────────
         umap_results: Dict[str, object] = {}

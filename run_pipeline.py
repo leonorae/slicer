@@ -33,15 +33,11 @@ from geometric_viz import GeometricFertilityPipeline
 # Built-in default prompts for validation runs (see spec §"Validation")
 # ---------------------------------------------------------------------------
 DEFAULT_PROMPTS = [
-    # ── Natural sentences (Wikitext-style) ───────────────────────────────
+    # ── Natural sentences — science & technology ──────────────────────────
     "The history of science is the study of the development of science and "
     "scientific knowledge, including both natural and social science.",
     "In mathematics, a group is a set equipped with an operation that combines "
     "any two elements to form a third element within the same set.",
-    "The economy of France is highly developed and free-market-oriented, "
-    "with government intervention playing a notable but declining role.",
-    "Language is a structured system of communication used by humans, "
-    "involving the use of words in a structured and conventional way.",
     "Quantum mechanics is a fundamental theory in physics that describes "
     "nature at the smallest scales of energy levels of atoms and subatomic particles.",
     "The neural network was trained for ten epochs on the full dataset "
@@ -50,21 +46,114 @@ DEFAULT_PROMPTS = [
     "multi-head self-attention and position-wise feed-forward layers.",
     "The mitochondria are membrane-bound organelles found in the cytoplasm "
     "of eukaryotic cells that generate most of the cell's supply of ATP.",
+    "A convolutional neural network applies learned filters across spatial "
+    "locations, sharing weights to detect translation-invariant features.",
+    "Entropy is a measure of the number of microscopic configurations that "
+    "correspond to a thermodynamic system in a given macroscopic state.",
+    "The human genome contains approximately three billion base pairs of DNA "
+    "encoding roughly twenty-two thousand protein-coding genes.",
+    "Gradient descent updates model parameters in the direction that most "
+    "steeply reduces the loss function over the training data distribution.",
+
+    # ── Natural sentences — humanities & social science ──────────────────
+    "Language is a structured system of communication used by humans, "
+    "involving the use of words in a structured and conventional way.",
+    "The economy of France is highly developed and free-market-oriented, "
+    "with government intervention playing a notable but declining role.",
     "Climate change refers to long-term shifts in temperatures and weather "
     "patterns, mainly caused by human activities since the 1800s.",
     "The French Revolution was a period of radical political and societal "
     "change in France that began with the Estates General of 1789.",
+    "Philosophy is the study of general and fundamental questions about "
+    "existence, knowledge, values, reason, mind, and language.",
+    "The Renaissance was a period of European cultural, artistic, political, "
+    "and scientific rebirth following the Middle Ages.",
+    "Democracy is a system of government in which power is vested in the "
+    "people, who exercise it directly or through elected representatives.",
+    "Cognitive psychology studies mental processes including perception, "
+    "memory, attention, language, problem solving, and decision making.",
+    "The Industrial Revolution introduced mechanised manufacturing, beginning "
+    "in Britain in the mid-eighteenth century and spreading worldwide.",
+    "Linguistics investigates the structure and diversity of human language "
+    "across phonology, morphology, syntax, semantics, and pragmatics.",
 
-    # ── Repeated-token sequences (amplifies positional signals) ──────────
-    "the " * 32,
-    "a " * 32,
-    "is " * 32,
-    "0 1 2 3 4 5 6 7 8 9 " * 6,
+    # ── Natural sentences — everyday & narrative ─────────────────────────
+    "She walked into the library and picked up the book she had reserved "
+    "three weeks ago, hoping it would answer her remaining questions.",
+    "The train departed precisely at noon, carrying hundreds of passengers "
+    "through the mountain tunnel towards the coastal city.",
+    "After years of practice, he finally understood that patience was not "
+    "simply waiting but maintaining a positive attitude while waiting.",
+    "The recipe called for two cups of flour, one egg, a pinch of salt, "
+    "and enough milk to bring the dough to the right consistency.",
+    "They discussed the proposal for nearly two hours before reaching a "
+    "consensus that satisfied every member of the working group.",
 
-    # ── Structured/random-like sequences (test structure without semantics) ─
-    "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20",
+    # ── Repeated-token sequences (amplify positional signals) ─────────────
+    "the " * 48,
+    "a " * 48,
+    "is " * 48,
+    "of " * 48,
+    "and " * 32,
+
+    # ── Numeric / ordinal sequences (clean positional signal) ─────────────
+    "0 1 2 3 4 5 6 7 8 9 " * 8,
+    "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 "
+    "21 22 23 24 25 26 27 28 29 30 31 32",
+    "100 200 300 400 500 600 700 800 900 1000 "
+    "1100 1200 1300 1400 1500 1600 1700 1800 1900 2000",
+
+    # ── Code-like text (different token distribution from prose) ──────────
+    "def compute_loss(predictions, targets, reduction='mean'): "
+    "return F.cross_entropy(predictions, targets, reduction=reduction)",
+    "for epoch in range(num_epochs): "
+    "optimizer.zero_grad(); loss = criterion(model(x), y); "
+    "loss.backward(); optimizer.step()",
+    "SELECT user_id, COUNT(*) AS n_orders "
+    "FROM orders WHERE created_at > '2024-01-01' "
+    "GROUP BY user_id HAVING n_orders > 5 ORDER BY n_orders DESC;",
+    "import numpy as np; import torch; from pathlib import Path; "
+    "from typing import Dict, List, Optional, Tuple",
+
+    # ── Structured / symbol-rich sequences ───────────────────────────────
     "( ) [ ] { } ; : , . ! ? @ # $ % ^ & * - + = / \\ | ~ ` ' \"",
-    "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+    "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu "
+    "xi omicron pi rho sigma tau upsilon phi chi psi omega",
+    "January February March April May June July August "
+    "September October November December",
+    "Monday Tuesday Wednesday Thursday Friday Saturday Sunday "
+    "Monday Tuesday Wednesday Thursday Friday Saturday Sunday",
+
+    # ── Paragraphs (fill the context window; boost total token count) ──────
+    "The development of large language models has transformed natural language "
+    "processing in ways that were difficult to anticipate even five years ago. "
+    "Early neural language models relied on recurrent architectures that "
+    "processed text sequentially, making parallelisation during training "
+    "difficult. The introduction of the Transformer replaced recurrence with "
+    "self-attention, allowing every position in a sequence to directly attend "
+    "to every other position. This architectural shift, combined with "
+    "unsupervised pre-training on large corpora, led to models that generalise "
+    "remarkably well across a wide variety of downstream tasks with minimal "
+    "task-specific supervision.",
+    "Astronomers have long sought to understand the distribution of matter on "
+    "cosmological scales. Observations of the cosmic microwave background "
+    "reveal fluctuations imprinted just four hundred thousand years after the "
+    "Big Bang, when the universe cooled enough for protons and electrons to "
+    "combine into neutral hydrogen. The pattern of these fluctuations encodes "
+    "information about the total density of matter and energy, the fraction "
+    "attributable to baryons versus dark matter, and the geometry of space "
+    "itself. Subsequent gravitational collapse amplified small overdensities "
+    "into the web of filaments, voids, and galaxy clusters we observe today.",
+    "Water is essential to all known life on Earth. It acts as a solvent for "
+    "biochemical reactions, a medium for transporting nutrients and waste "
+    "products, and a temperature buffer due to its unusually high specific "
+    "heat capacity. The molecule's polarity arises from the electronegativity "
+    "difference between oxygen and hydrogen, creating a partial negative "
+    "charge on the oxygen end and partial positive charges on the hydrogen "
+    "ends. This polarity enables the hydrogen bonding responsible for many of "
+    "water's anomalous properties, including its expansion on freezing, which "
+    "prevents lakes from solidifying from the bottom up and enables aquatic "
+    "life to survive winter.",
 ]
 
 
@@ -104,7 +193,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--max_length",
         type=int,
-        default=128,
+        default=256,
         help="Maximum token sequence length (longer sequences are truncated).",
     )
     p.add_argument(
