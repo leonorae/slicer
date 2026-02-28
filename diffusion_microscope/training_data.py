@@ -6,7 +6,7 @@ and returns a shuffled list ready for prepare_training_data().
 
 Sources
 -------
-flickr30k   Flickr 30k Captions  – concrete visual scene descriptions
+flickr30k   Flickr 30k Captions  – concrete visual scene descriptions (phiyodr/flickr30k)
 wikipedia   Wikipedia (English)  – encyclopaedic / abstract prose
 cc3m        Conceptual Captions  – diverse web image alt-text
 wordnet     WordNet (via NLTK)   – short definitions of abstract nouns
@@ -39,20 +39,17 @@ _SENT_RE = re.compile(r"(?<=[.!?])\s+")
 def _load_flickr30k(n: int) -> list[str]:
     from datasets import load_dataset  # type: ignore
 
+    # phiyodr/flickr30k uses plain parquet (no database loading script).
+    # Schema: each row has a 'sentences' list of dicts with a 'raw' caption key.
     ds = load_dataset(
-        "nlphuji/flickr30k",
-        split="test",  # only split available without auth
+        "phiyodr/flickr30k",
+        split="train",
         streaming=True,
-        trust_remote_code=True,
     )
     texts: list[str] = []
     for row in ds:
-        # Schema: "caption" is a list of 5 caption strings
-        captions = row.get("caption") or []
-        if isinstance(captions, str):
-            captions = [captions]
-        for cap in captions:
-            cap = (cap or "").strip()
+        for sent in row.get("sentences") or []:
+            cap = (sent.get("raw") if isinstance(sent, dict) else sent or "").strip()
             if cap:
                 texts.append(cap)
             if len(texts) >= n:
@@ -68,7 +65,6 @@ def _load_wikipedia(n: int) -> list[str]:
         "20231101.en",
         split="train",
         streaming=True,
-        trust_remote_code=True,
     )
     texts: list[str] = []
     for row in ds:
@@ -89,7 +85,6 @@ def _load_cc3m(n: int) -> list[str]:
         "google-research-datasets/conceptual_captions",
         split="train",
         streaming=True,
-        trust_remote_code=True,
     )
     texts: list[str] = []
     for row in ds:
@@ -140,7 +135,6 @@ def _load_tinystories(n: int) -> list[str]:
         "roneneldan/TinyStories",
         split="train",
         streaming=True,
-        trust_remote_code=True,
     )
     texts: list[str] = []
     for row in ds:
