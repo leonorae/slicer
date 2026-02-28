@@ -25,6 +25,11 @@ class DiffusionMicroscope:
     Generate images from CLIP-space embeddings via a frozen Stable Diffusion
     pipeline.
 
+    Supports SD 1.x / 2.x and SDXL / SDXL-Turbo.  The model variant is
+    auto-detected from the model ID: IDs containing ``"xl"`` use the SDXL
+    pipeline; IDs additionally containing ``"turbo"`` default to 4 inference
+    steps with guidance_scale=0.
+
     Parameters
     ----------
     sd_model_id : HuggingFace model ID for the SD checkpoint
@@ -43,6 +48,14 @@ class DiffusionMicroscope:
         self.dtype = dtype
         self._pipe = None
 
+    @property
+    def _is_sdxl(self) -> bool:
+        return "xl" in self.sd_model_id.lower()
+
+    @property
+    def _is_turbo(self) -> bool:
+        return "turbo" in self.sd_model_id.lower()
+
     def _load_pipeline(self):
         """Lazy-load the SD pipeline on first use."""
         if self._pipe is not None:
@@ -50,7 +63,7 @@ class DiffusionMicroscope:
 
         import torch
         try:
-            from diffusers import StableDiffusionPipeline
+            from diffusers import AutoPipelineForText2Image, StableDiffusionPipeline
         except ImportError:
             raise ImportError(
                 "diffusers is required for image generation.\n"
@@ -59,11 +72,17 @@ class DiffusionMicroscope:
             ) from None
 
         torch_dtype = getattr(torch, self.dtype)
-        self._pipe = StableDiffusionPipeline.from_pretrained(
-            self.sd_model_id,
-            torch_dtype=torch_dtype,
-            safety_checker=None,
-        )
+        if self._is_sdxl:
+            self._pipe = AutoPipelineForText2Image.from_pretrained(
+                self.sd_model_id,
+                torch_dtype=torch_dtype,
+            )
+        else:
+            self._pipe = StableDiffusionPipeline.from_pretrained(
+                self.sd_model_id,
+                torch_dtype=torch_dtype,
+                safety_checker=None,
+            )
         self._pipe = self._pipe.to(self.device)
 
     # ------------------------------------------------------------------
@@ -75,6 +94,8 @@ class DiffusionMicroscope:
         prompt_embeds: np.ndarray,
         negative_prompt_embeds: Optional[np.ndarray] = None,
         *,
+        pooled_prompt_embeds: Optional[np.ndarray] = None,
+        negative_pooled_prompt_embeds: Optional[np.ndarray] = None,
         guidance_scale: float = 7.0,
         num_inference_steps: int = 30,
         seed: int = 42,
@@ -86,10 +107,12 @@ class DiffusionMicroscope:
 
         Parameters
         ----------
-        prompt_embeds          : (1, seq_len, clip_dim) float32
-        negative_prompt_embeds : (1, seq_len, clip_dim) float32 (zeros if None)
-        guidance_scale         : classifier-free guidance strength
-        seed                   : RNG seed for reproducibility
+        prompt_embeds                 : (1, seq_len, clip_dim) float32
+        negative_prompt_embeds        : (1, seq_len, clip_dim) float32 (zeros if None)
+        pooled_prompt_embeds          : (1, pool_dim) — required for SDXL
+        negative_pooled_prompt_embeds : (1, pool_dim) — required for SDXL
+        guidance_scale                : classifier-free guidance strength
+        seed                          : RNG seed for reproducibility
 
         Returns
         -------
@@ -99,25 +122,56 @@ class DiffusionMicroscope:
 
         self._load_pipeline()
 
-        pe = torch.tensor(prompt_embeds, dtype=self._pipe.unet.dtype).to(self.device)
-        if negative_prompt_embeds is None:
-            ne = torch.zeros_like(pe)
-        else:
-            ne = torch.tensor(
-                negative_prompt_embeds, dtype=self._pipe.unet.dtype
-            ).to(self.device)
+        # Detect dtype from unet (works for both SD and SDXL pipelines)
+        pipe_dtype = self._pipe.unet.dtype
+
+        pe = torch.tensor(prompt_embeds, dtype=pipe_dtype).to(self.device)
+        ne = (
+            torch.zeros_like(pe)
+            if negative_prompt_embeds is None
+            else torch.tensor(negative_prompt_embeds, dtype=pipe_dtype).to(self.device)
+        )
 
         gen = torch.Generator(device=self.device).manual_seed(seed)
 
-        result = self._pipe(
-            prompt_embeds=pe,
-            negative_prompt_embeds=ne,
-            guidance_scale=guidance_scale,
-            num_inference_steps=num_inference_steps,
-            generator=gen,
-            height=height,
-            width=width,
-        )
+        if self._is_sdxl:
+            # SDXL Turbo defaults: 4 steps, no CFG
+            actual_steps = 4 if self._is_turbo else num_inference_steps
+            actual_guidance = 0.0 if self._is_turbo else guidance_scale
+
+            if pooled_prompt_embeds is None:
+                pooled = torch.zeros((pe.shape[0], 1280), dtype=pipe_dtype).to(self.device)
+            else:
+                pooled = torch.tensor(pooled_prompt_embeds, dtype=pipe_dtype).to(self.device)
+
+            if negative_pooled_prompt_embeds is None:
+                neg_pooled = torch.zeros_like(pooled)
+            else:
+                neg_pooled = torch.tensor(
+                    negative_pooled_prompt_embeds, dtype=pipe_dtype
+                ).to(self.device)
+
+            result = self._pipe(
+                prompt_embeds=pe,
+                negative_prompt_embeds=ne,
+                pooled_prompt_embeds=pooled,
+                negative_pooled_prompt_embeds=neg_pooled,
+                guidance_scale=actual_guidance,
+                num_inference_steps=actual_steps,
+                generator=gen,
+                height=height,
+                width=width,
+            )
+        else:
+            result = self._pipe(
+                prompt_embeds=pe,
+                negative_prompt_embeds=ne,
+                guidance_scale=guidance_scale,
+                num_inference_steps=num_inference_steps,
+                generator=gen,
+                height=height,
+                width=width,
+            )
         return result.images[0]
 
     # ------------------------------------------------------------------
@@ -136,19 +190,32 @@ class DiffusionMicroscope:
         """
         Generate an image from a single CLIP-space vector (no pre-formatting).
 
+        Automatically uses the correct conditioning format for SD 1.x/2.x vs SDXL.
+
         Parameters
         ----------
         clip_vector : (clip_dim,) projected embedding
         """
-        from .clip_bridge import format_sd_conditioning
-
-        pe, ne = format_sd_conditioning(clip_vector, seq_len=seq_len)
-        return self.generate(
-            pe, ne,
-            guidance_scale=guidance_scale,
-            num_inference_steps=num_inference_steps,
-            seed=seed,
-        )
+        if self._is_sdxl:
+            from .clip_bridge import format_sdxl_conditioning
+            pe, ne, pooled, neg_pooled = format_sdxl_conditioning(clip_vector, seq_len=seq_len)
+            return self.generate(
+                pe, ne,
+                pooled_prompt_embeds=pooled,
+                negative_pooled_prompt_embeds=neg_pooled,
+                guidance_scale=guidance_scale,
+                num_inference_steps=num_inference_steps,
+                seed=seed,
+            )
+        else:
+            from .clip_bridge import format_sd_conditioning
+            pe, ne = format_sd_conditioning(clip_vector, seq_len=seq_len)
+            return self.generate(
+                pe, ne,
+                guidance_scale=guidance_scale,
+                num_inference_steps=num_inference_steps,
+                seed=seed,
+            )
 
     # ------------------------------------------------------------------
     # Layer sweep

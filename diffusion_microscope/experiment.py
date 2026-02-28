@@ -85,6 +85,8 @@ class ExperimentRunner:
         clip_pretrained: str = "openai",
         device: str = "cpu",
         cache_dir: Optional[str] = None,
+        write_sidecars: bool = False,
+        track_lpips: bool = True,
     ):
         self.config = config
         self.llm_model = llm_model
@@ -93,6 +95,8 @@ class ExperimentRunner:
         self.clip_pretrained = clip_pretrained
         self.device = device
         self.cache_dir = cache_dir
+        self.write_sidecars = write_sidecars
+        self.track_lpips = track_lpips
 
         out = config.get("output", {})
         self.base_dir = Path(out.get("base_dir", "./experiment_results"))
@@ -340,9 +344,11 @@ class ExperimentRunner:
         """
         Generate all (projection × probe × layer × CFG × seed) images.
         Already-generated images (tracked in manifest) are skipped.
+
+        Inline LPIPS (if self.track_lpips): compares each layer image to
+        the previous layer image with the same (proj, text, cfg, seed).
         """
         from .generator import DiffusionMicroscope
-        from .clip_bridge import format_sd_conditioning
 
         cfg_values = [float(c) for c in self.config.get("cfg_values", [7.0])]
         seeds = [int(s) for s in self.config.get("seeds", [42])]
@@ -352,6 +358,21 @@ class ExperimentRunner:
             device=self.device,
             dtype="float16" if "cuda" in self.device else "float32",
         )
+
+        # Set up inline LPIPS if requested
+        lpips_fn = None
+        if self.track_lpips:
+            try:
+                import torch
+                import lpips as lpips_lib
+                lpips_fn = lpips_lib.LPIPS(net="alex").eval()
+                if "cuda" in self.device:
+                    lpips_fn = lpips_fn.to(self.device)
+            except ImportError:
+                print(
+                    "[Experiment] lpips not available; skipping LPIPS tracking",
+                    flush=True,
+                )
 
         total_todo = (
             len(projections)
@@ -370,6 +391,9 @@ class ExperimentRunner:
                 text_dir = proj_grids_dir / text_slug / "per_layer"
                 text_dir.mkdir(parents=True, exist_ok=True)
 
+                # prev_img_arr[(cfg, seed)] → float32 np array of prev layer img
+                prev_img_arr: dict = {}
+
                 for layer_idx, act in sorted(layer_acts.items()):
                     if is_per_layer and layer_idx not in proj:
                         continue
@@ -379,7 +403,6 @@ class ExperimentRunner:
                         if is_per_layer
                         else proj.transform(act)
                     )
-                    pe, ne = format_sd_conditioning(clip_vec)
 
                     for cfg in cfg_values:
                         for seed in seeds:
@@ -392,6 +415,13 @@ class ExperimentRunner:
                             mkey = str(img_path.relative_to(self.base_dir))
 
                             if mkey in self._manifest["images"]:
+                                # Still update prev_img_arr for LPIPS continuity
+                                if lpips_fn is not None and img_path.exists():
+                                    from PIL import Image as _PILImg
+                                    _a = np.array(
+                                        _PILImg.open(img_path).convert("RGB")
+                                    ).astype(np.float32) / 255.0
+                                    prev_img_arr[(cfg, seed)] = _a
                                 continue
 
                             print(
@@ -401,17 +431,37 @@ class ExperimentRunner:
                                 flush=True,
                             )
 
-                            img = scope.generate(
-                                pe, ne, guidance_scale=cfg, seed=seed,
+                            img = scope.generate_from_vector(
+                                clip_vec, guidance_scale=cfg, seed=seed,
                             )
                             img.save(img_path)
 
                             meta = self._image_meta(
                                 mkey, proj_key, text, layer_idx, cfg, seed,
                             )
-                            sidecar = img_path.with_suffix(".json")
-                            with open(sidecar, "w") as f:
-                                json.dump(meta, f, indent=2)
+
+                            # Inline LPIPS
+                            if lpips_fn is not None:
+                                import torch
+                                cur_arr = (
+                                    np.array(img.convert("RGB")).astype(np.float32)
+                                    / 255.0
+                                )
+                                prev_arr = prev_img_arr.get((cfg, seed))
+                                if prev_arr is not None:
+                                    with torch.no_grad():
+                                        d = lpips_fn(
+                                            _to_tensor(prev_arr, self.device),
+                                            _to_tensor(cur_arr, self.device),
+                                        )
+                                    meta["metrics"]["lpips_to_prev_layer"] = round(
+                                        float(d.item()), 6
+                                    )
+                                prev_img_arr[(cfg, seed)] = cur_arr
+
+                            if self.write_sidecars:
+                                with open(img_path.with_suffix(".json"), "w") as f:
+                                    json.dump(meta, f, indent=2)
 
                             self._manifest["images"][mkey] = meta
                             if len(self._manifest["images"]) % 25 == 0:
@@ -460,8 +510,6 @@ class ExperimentRunner:
         cfg_values: List[float],
         seeds: List[int],
     ):
-        from .clip_bridge import format_sd_conditioning
-
         for _, (from_acts, to_acts, n_steps, from_text, to_text) in (
             interp_activations.items()
         ):
@@ -493,7 +541,6 @@ class ExperimentRunner:
                             if is_per_layer
                             else proj.transform(interp_act)
                         )
-                        pe, ne = format_sd_conditioning(clip_vec)
 
                         for cfg in cfg_values:
                             for seed in seeds:
@@ -515,12 +562,12 @@ class ExperimentRunner:
                                     flush=True,
                                 )
 
-                                img = scope.generate(
-                                    pe, ne, guidance_scale=cfg, seed=seed,
+                                img = scope.generate_from_vector(
+                                    clip_vec, guidance_scale=cfg, seed=seed,
                                 )
                                 img.save(img_path)
 
-                                self._manifest["images"][mkey] = {
+                                meta = {
                                     "image_path": mkey,
                                     "experiment_config": {
                                         "projection_type": self._manifest[
@@ -545,6 +592,12 @@ class ExperimentRunner:
                                     },
                                     "metrics": {},
                                 }
+                                if self.write_sidecars:
+                                    with open(
+                                        img_path.with_suffix(".json"), "w"
+                                    ) as f:
+                                        json.dump(meta, f, indent=2)
+                                self._manifest["images"][mkey] = meta
 
     # ------------------------------------------------------------------
     # Phase 3: Compose grids
@@ -740,6 +793,241 @@ class ExperimentRunner:
         print(f"[Experiment] Metrics computed for {updated} images", flush=True)
 
     # ------------------------------------------------------------------
+    # Phase 5: Animations (layer-sweep GIFs)
+    # ------------------------------------------------------------------
+
+    def create_animations(self, projections: dict, probe_texts: List[str]):
+        """
+        Create layer-sweep GIF animations for each (proj, text, cfg, seed).
+
+        Saves: grids/by_projection/{proj_key}/{text_slug}/anim_CFG{cfg}_seed{seed}.gif
+        """
+        try:
+            from PIL import Image as PILImage
+        except ImportError:
+            print(
+                "[Experiment] Pillow not available, skipping animations",
+                flush=True,
+            )
+            return
+
+        cfg_values = [float(c) for c in self.config.get("cfg_values", [7.0])]
+        seeds = [int(s) for s in self.config.get("seeds", [42])]
+
+        for proj_key in projections:
+            for text in probe_texts:
+                text_slug = _slug(text)
+                per_layer_dir = self.grids_dir / proj_key / text_slug / "per_layer"
+                if not per_layer_dir.exists():
+                    continue
+
+                for cfg in cfg_values:
+                    for seed in seeds:
+                        anim_path = (
+                            self.grids_dir
+                            / proj_key
+                            / text_slug
+                            / f"anim_CFG{cfg:.1f}_seed{seed}.gif"
+                        )
+                        akey = str(anim_path.relative_to(self.base_dir))
+                        if akey in self._manifest.get("animations", {}):
+                            continue
+
+                        pattern = f"L*_CFG{cfg:.1f}_seed{seed}.{self.image_fmt}"
+                        layer_files = sorted(
+                            per_layer_dir.glob(pattern),
+                            key=lambda p: int(p.stem.split("_")[0][1:]),
+                        )
+                        if len(layer_files) < 2:
+                            continue
+
+                        frames = [
+                            PILImage.open(p).convert("RGB").resize((256, 256))
+                            for p in layer_files
+                        ]
+                        frames[0].save(
+                            anim_path,
+                            save_all=True,
+                            append_images=frames[1:],
+                            duration=150,
+                            loop=0,
+                        )
+                        print(f"[Experiment] Animation → {anim_path}", flush=True)
+
+                        self._manifest.setdefault("animations", {})[akey] = {
+                            "projection": proj_key,
+                            "text": text,
+                            "cfg": cfg,
+                            "seed": seed,
+                            "n_frames": len(frames),
+                            "path": str(anim_path),
+                        }
+
+        self._save_manifest()
+
+    # ------------------------------------------------------------------
+    # Phase 6: Dashboard
+    # ------------------------------------------------------------------
+
+    def generate_dashboard(self):
+        """
+        Generate a self-contained HTML dashboard at base_dir/dashboard.html.
+
+        Displays all generated images grouped by probe text, with controls
+        to filter by projection type, CFG, seed, and layer range.
+        """
+        dashboard_path = self.base_dir / "dashboard.html"
+
+        images_by_text: dict = {}
+        for mkey, meta in self._manifest["images"].items():
+            gp = meta.get("generation_params", {})
+            text = gp.get("probe_text", "")
+            if not text:
+                continue
+            images_by_text.setdefault(text, []).append(
+                {
+                    "path": mkey,
+                    "proj": meta.get("experiment_config", {}).get(
+                        "projection_type", ""
+                    ),
+                    "alpha": meta.get("experiment_config", {}).get("alpha"),
+                    "layer": gp.get("layer"),
+                    "cfg": gp.get("cfg"),
+                    "seed": gp.get("seed"),
+                    "lpips": meta.get("metrics", {}).get("lpips_to_prev_layer"),
+                }
+            )
+
+        manifest_json = json.dumps(
+            {
+                "images_by_text": images_by_text,
+                "projections": self._manifest.get("projections", {}),
+                "animations": self._manifest.get("animations", {}),
+            },
+            indent=None,
+        )
+
+        html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Diffusion Microscope – Results Dashboard</title>
+<style>
+  body {{ font-family: system-ui, sans-serif; margin: 0; padding: 12px; background: #111; color: #eee; }}
+  h1 {{ font-size: 1.2rem; margin-bottom: 8px; }}
+  #controls {{ display: flex; flex-wrap: wrap; gap: 10px; background: #1e1e1e; padding: 10px; border-radius: 6px; margin-bottom: 12px; }}
+  #controls label {{ font-size: 0.85rem; display: flex; flex-direction: column; gap: 3px; }}
+  select, input[type=range] {{ background: #333; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 3px 6px; }}
+  .section-title {{ font-size: 1rem; font-weight: bold; margin: 14px 0 6px; color: #adf; border-bottom: 1px solid #333; padding-bottom: 4px; }}
+  .grid {{ display: flex; flex-wrap: wrap; gap: 6px; }}
+  .card {{ background: #1e1e1e; border-radius: 5px; overflow: hidden; cursor: pointer; transition: transform .15s; width: 160px; }}
+  .card:hover {{ transform: scale(1.04); }}
+  .card img {{ width: 160px; height: 160px; object-fit: cover; display: block; }}
+  .card .meta {{ font-size: 0.65rem; padding: 4px 6px; color: #aaa; }}
+  .hidden {{ display: none !important; }}
+  #lightbox {{ display: none; position: fixed; inset: 0; background: rgba(0,0,0,.85); z-index: 100; align-items: center; justify-content: center; }}
+  #lightbox.open {{ display: flex; }}
+  #lightbox img {{ max-width: 90vw; max-height: 90vh; border-radius: 6px; }}
+  #lightbox .close {{ position: absolute; top: 18px; right: 24px; font-size: 2rem; cursor: pointer; color: #eee; }}
+</style>
+</head>
+<body>
+<h1>Diffusion Microscope — Results Dashboard</h1>
+<div id="controls">
+  <label>Projection<select id="f-proj"><option value="">All</option></select></label>
+  <label>CFG<select id="f-cfg"><option value="">All</option></select></label>
+  <label>Seed<select id="f-seed"><option value="">All</option></select></label>
+  <label>Layer min<input type="range" id="f-lmin" min="0" max="100" value="0"> <span id="lmin-val">0</span></label>
+  <label>Layer max<input type="range" id="f-lmax" min="0" max="100" value="100"> <span id="lmax-val">100</span></label>
+</div>
+<div id="gallery"></div>
+<div id="lightbox"><span class="close" onclick="closeLB()">✕</span><img id="lb-img" src=""></div>
+<script>
+const DATA = {manifest_json};
+const gallery = document.getElementById('gallery');
+
+// Populate filter dropdowns
+const projs = new Set(), cfgs = new Set(), seeds = new Set();
+let layerMin = Infinity, layerMax = -Infinity;
+Object.values(DATA.images_by_text).flat().forEach(im => {{
+  if (im.proj) projs.add(im.proj);
+  if (im.cfg != null) cfgs.add(im.cfg);
+  if (im.seed != null) seeds.add(im.seed);
+  if (im.layer != null) {{ layerMin = Math.min(layerMin, im.layer); layerMax = Math.max(layerMax, im.layer); }}
+}});
+[...projs].sort().forEach(v => document.getElementById('f-proj').add(new Option(v, v)));
+[...cfgs].sort((a,b)=>a-b).forEach(v => document.getElementById('f-cfg').add(new Option(v, v)));
+[...seeds].sort((a,b)=>a-b).forEach(v => document.getElementById('f-seed').add(new Option(v, v)));
+if (layerMin < Infinity) {{
+  ['f-lmin','f-lmax'].forEach(id => {{
+    const el = document.getElementById(id);
+    el.min = layerMin; el.max = layerMax;
+    el.value = id === 'f-lmin' ? layerMin : layerMax;
+  }});
+  document.getElementById('lmin-val').textContent = layerMin;
+  document.getElementById('lmax-val').textContent = layerMax;
+}}
+
+function getFilters() {{
+  return {{
+    proj: document.getElementById('f-proj').value,
+    cfg: document.getElementById('f-cfg').value,
+    seed: document.getElementById('f-seed').value,
+    lmin: +document.getElementById('f-lmin').value,
+    lmax: +document.getElementById('f-lmax').value,
+  }};
+}}
+
+function render() {{
+  const f = getFilters();
+  gallery.innerHTML = '';
+  Object.entries(DATA.images_by_text).forEach(([text, imgs]) => {{
+    const filtered = imgs.filter(im =>
+      (!f.proj || im.proj === f.proj) &&
+      (!f.cfg  || String(im.cfg) === f.cfg) &&
+      (!f.seed || String(im.seed) === f.seed) &&
+      (im.layer == null || (im.layer >= f.lmin && im.layer <= f.lmax))
+    );
+    if (!filtered.length) return;
+    const sec = document.createElement('div');
+    sec.innerHTML = `<div class="section-title">${{text}}</div>`;
+    const grid = document.createElement('div'); grid.className = 'grid';
+    filtered.sort((a,b) => (a.layer??0)-(b.layer??0) || (a.cfg??0)-(b.cfg??0)).forEach(im => {{
+      const card = document.createElement('div'); card.className = 'card';
+      const lpipsStr = im.lpips != null ? ` | LPIPS ${{im.lpips.toFixed(3)}}` : '';
+      card.innerHTML = `<img src="${{im.path}}" loading="lazy" onclick="openLB(this.src)">
+        <div class="meta">L${{im.layer}} CFG${{im.cfg}} seed${{im.seed}}${{lpipsStr}}<br>${{im.proj}}</div>`;
+      grid.appendChild(card);
+    }});
+    sec.appendChild(grid);
+    gallery.appendChild(sec);
+  }});
+}}
+
+['f-proj','f-cfg','f-seed'].forEach(id => document.getElementById(id).addEventListener('change', render));
+document.getElementById('f-lmin').addEventListener('input', function() {{
+  document.getElementById('lmin-val').textContent = this.value; render();
+}});
+document.getElementById('f-lmax').addEventListener('input', function() {{
+  document.getElementById('lmax-val').textContent = this.value; render();
+}});
+
+function openLB(src) {{ document.getElementById('lb-img').src = src; document.getElementById('lightbox').classList.add('open'); }}
+function closeLB() {{ document.getElementById('lightbox').classList.remove('open'); }}
+document.getElementById('lightbox').addEventListener('click', e => {{ if (e.target.id === 'lightbox') closeLB(); }});
+
+render();
+</script>
+</body>
+</html>"""
+
+        with open(dashboard_path, "w", encoding="utf-8") as f:
+            f.write(html)
+
+        print(f"[Experiment] Dashboard → {dashboard_path}", flush=True)
+        return str(dashboard_path)
+
+    # ------------------------------------------------------------------
     # Top-level run
     # ------------------------------------------------------------------
 
@@ -755,7 +1043,8 @@ class ExperimentRunner:
         ----------
         training_texts : texts used to train projections
         phases         : ordered list of phases to execute; subset of
-                         'train', 'generate', 'grids', 'metrics'
+                         'train', 'generate', 'grids', 'metrics',
+                         'animations', 'dashboard'
         """
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
@@ -911,6 +1200,26 @@ class ExperimentRunner:
         if "metrics" in phases:
             print(f"\n[Experiment] Phase: metrics", flush=True)
             self.compute_metrics()
+
+        # ---------------------------------------------------------------
+        # Phase: animations
+        # ---------------------------------------------------------------
+        if "animations" in phases:
+            if not projections:
+                print(
+                    "[Experiment] No projections available for animations",
+                    flush=True,
+                )
+            else:
+                print(f"\n[Experiment] Phase: animations", flush=True)
+                self.create_animations(projections, flat_probes)
+
+        # ---------------------------------------------------------------
+        # Phase: dashboard
+        # ---------------------------------------------------------------
+        if "dashboard" in phases:
+            print(f"\n[Experiment] Phase: dashboard", flush=True)
+            self.generate_dashboard()
 
         self._save_manifest()
         print(f"\n[Experiment] Complete → {self.base_dir}", flush=True)

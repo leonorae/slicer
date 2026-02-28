@@ -138,9 +138,9 @@ def parse_args() -> argparse.Namespace:
         help="Number of training texts when --auto_corpus is set (default: 5000).",
     )
     p.add_argument(
-        "--corpus_sources", default="coco,wikipedia,cc3m,wordnet",
+        "--corpus_sources", default="flickr30k,wikipedia,cc3m,wordnet,tinystories",
         help="Comma-separated corpus sources for --auto_corpus. "
-             "Available: coco, wikipedia, cc3m, wordnet",
+             "Available: flickr30k, wikipedia, cc3m, wordnet, tinystories",
     )
     p.add_argument(
         "--probe", action="append", default=None,

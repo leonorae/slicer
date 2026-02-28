@@ -46,16 +46,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--phase",
         nargs="+",
-        choices=["train", "generate", "grids", "metrics", "all"],
+        choices=["train", "generate", "grids", "metrics", "animations", "dashboard", "all"],
         default=["all"],
         metavar="PHASE",
         help=(
             "Phases to run (space-separated, default: all).\n"
-            "  train    – train all (projection_type × alpha) combinations\n"
-            "  generate – generate images for all parameter combinations\n"
-            "  grids    – compose per-(projection, probe, seed) grid images\n"
-            "  metrics  – compute LPIPS + image variance\n"
-            "  all      – run every phase in order"
+            "  train      – train all (projection_type × alpha) combinations\n"
+            "  generate   – generate images for all parameter combinations\n"
+            "  grids      – compose per-(projection, probe, seed) grid images\n"
+            "  metrics    – compute LPIPS + image variance\n"
+            "  animations – create layer-sweep GIF animations\n"
+            "  dashboard  – generate self-contained HTML dashboard\n"
+            "  all        – run every phase in order"
         ),
     )
 
@@ -72,6 +74,14 @@ def parse_args() -> argparse.Namespace:
                    help="'cpu' or 'cuda' (overrides config, default: auto-detect)")
     p.add_argument("--cache_dir", default=None,
                    help="Directory for caching LLM training-data activations")
+    p.add_argument(
+        "--write_sidecars", action="store_true", default=False,
+        help="Write per-image JSON sidecar files alongside each image (default: off)",
+    )
+    p.add_argument(
+        "--no_lpips", action="store_true", default=False,
+        help="Disable inline LPIPS computation during image generation",
+    )
 
     # Training corpus
     corpus = p.add_mutually_exclusive_group()
@@ -88,7 +98,7 @@ def parse_args() -> argparse.Namespace:
         help="Training corpus size (overrides config projections.training_data_size)",
     )
     p.add_argument(
-        "--corpus_sources", default="coco,wikipedia,cc3m,wordnet",
+        "--corpus_sources", default="flickr30k,wikipedia,cc3m,wordnet,tinystories",
         help="Comma-separated sources for --auto_corpus",
     )
 
@@ -174,7 +184,7 @@ def main() -> None:
     # Resolve phases
     phases = args.phase
     if "all" in phases:
-        phases = ["train", "generate", "grids", "metrics"]
+        phases = ["train", "generate", "grids", "metrics", "animations", "dashboard"]
     print(f"Phases : {phases}")
     print(f"Config : {config_path}")
     print(f"Output : {config.get('output', {}).get('base_dir', './experiment_results')}")
@@ -190,17 +200,26 @@ def main() -> None:
         clip_pretrained=clip_pretrained,
         device=device,
         cache_dir=args.cache_dir,
+        write_sidecars=args.write_sidecars,
+        track_lpips=not args.no_lpips,
     )
 
     results = runner.run(training_texts=training_texts, phases=phases)
 
-    n_images = len(results["manifest"].get("images", {}))
-    n_grids = len(results["manifest"].get("grids", {}))
+    manifest = results["manifest"]
+    n_images = len(manifest.get("images", {}))
+    n_grids = len(manifest.get("grids", {}))
+    n_anims = len(manifest.get("animations", {}))
+    dash_path = results["base_dir"] + "/dashboard.html"
     print(f"\n{'='*60}")
     print(f"Experiment complete")
-    print(f"Output : {results['base_dir']}")
-    print(f"Images : {n_images}")
-    print(f"Grids  : {n_grids}")
+    print(f"Output     : {results['base_dir']}")
+    print(f"Images     : {n_images}")
+    print(f"Grids      : {n_grids}")
+    if n_anims:
+        print(f"Animations : {n_anims}")
+    if "dashboard" in phases:
+        print(f"Dashboard  : {dash_path}")
 
 
 if __name__ == "__main__":

@@ -1,15 +1,16 @@
 """
 Stratified training-corpus builder for the LLM→CLIP projection.
 
-Pulls from up to four public datasets, mixes them proportionally, deduplicates,
+Pulls from public datasets, mixes them proportionally, deduplicates,
 and returns a shuffled list ready for prepare_training_data().
 
 Sources
 -------
-coco        COCO Captions 2017   – concrete visual scene descriptions
+flickr30k   Flickr 30k Captions  – concrete visual scene descriptions
 wikipedia   Wikipedia (English)  – encyclopaedic / abstract prose
 cc3m        Conceptual Captions  – diverse web image alt-text
 wordnet     WordNet (via NLTK)   – short definitions of abstract nouns
+tinystories TinyStories          – short simple English stories
 
 Each source is loaded in streaming mode so only the required number of rows are
 downloaded.  Sources that fail (missing packages, auth errors, network issues)
@@ -25,7 +26,7 @@ from typing import Optional
 
 
 # Ordered default mix — change weights in load_training_corpus() to override.
-ALL_SOURCES = ("coco", "wikipedia", "cc3m", "wordnet")
+ALL_SOURCES = ("flickr30k", "wikipedia", "cc3m", "wordnet", "tinystories")
 
 # Sentence splitter for Wikipedia paragraphs.
 _SENT_RE = re.compile(r"(?<=[.!?])\s+")
@@ -35,27 +36,21 @@ _SENT_RE = re.compile(r"(?<=[.!?])\s+")
 # Per-source loaders
 # ---------------------------------------------------------------------------
 
-def _load_coco(n: int) -> list[str]:
+def _load_flickr30k(n: int) -> list[str]:
     from datasets import load_dataset  # type: ignore
 
     ds = load_dataset(
-        "HuggingFaceM4/COCO",
-        "2017_captions",
-        split="train",
+        "nlphuji/flickr30k",
+        split="test",  # only split available without auth
         streaming=True,
         trust_remote_code=True,
     )
     texts: list[str] = []
     for row in ds:
-        # Schema: sentences_raw is a list of dicts with key "raw"
-        raw = row.get("sentences_raw") or []
-        captions = [
-            (c["raw"] if isinstance(c, dict) else c)
-            for c in raw
-        ]
-        # Fallback: single "caption" string
-        if not captions:
-            captions = [row.get("caption", "")]
+        # Schema: "caption" is a list of 5 caption strings
+        captions = row.get("caption") or []
+        if isinstance(captions, str):
+            captions = [captions]
         for cap in captions:
             cap = (cap or "").strip()
             if cap:
@@ -138,15 +133,40 @@ def _load_wordnet(n: int) -> list[str]:
     return texts
 
 
+def _load_tinystories(n: int) -> list[str]:
+    from datasets import load_dataset  # type: ignore
+
+    ds = load_dataset(
+        "roneneldan/TinyStories",
+        split="train",
+        streaming=True,
+        trust_remote_code=True,
+    )
+    texts: list[str] = []
+    for row in ds:
+        story = (row.get("text") or "").strip()
+        if not story:
+            continue
+        # Split into sentences and keep medium-length ones
+        for sent in _SENT_RE.split(story):
+            sent = sent.strip()
+            if 20 <= len(sent) <= 300:
+                texts.append(sent)
+            if len(texts) >= n:
+                return texts
+    return texts
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 _LOADERS = {
-    "coco": _load_coco,
+    "flickr30k": _load_flickr30k,
     "wikipedia": _load_wikipedia,
     "cc3m": _load_cc3m,
     "wordnet": _load_wordnet,
+    "tinystories": _load_tinystories,
 }
 
 
