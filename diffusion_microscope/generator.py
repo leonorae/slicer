@@ -63,17 +63,20 @@ class DiffusionMicroscope:
 
         import torch
         try:
-            from diffusers import AutoPipelineForText2Image, StableDiffusionPipeline
-        except ImportError:
-            raise ImportError(
-                "diffusers is required for image generation.\n"
-                "Install it with:  uv pip install diffusers --system\n"
-                "or:               uv sync --extra microscope"
-            ) from None
+            from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline
+        except ImportError as exc:
+            import importlib.util
+            if importlib.util.find_spec("diffusers") is None:
+                raise ImportError(
+                    "diffusers is required for image generation.\n"
+                    "Install it with:  uv pip install diffusers\n"
+                    "or:               uv sync --extra microscope"
+                ) from exc
+            raise
 
         torch_dtype = getattr(torch, self.dtype)
         if self._is_sdxl:
-            self._pipe = AutoPipelineForText2Image.from_pretrained(
+            self._pipe = StableDiffusionXLPipeline.from_pretrained(
                 self.sd_model_id,
                 torch_dtype=torch_dtype,
             )

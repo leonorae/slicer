@@ -29,6 +29,7 @@ microscope = [
     "lpips>=0.1.4",             # perceptual similarity (optional analysis)
     "datasets>=2.14.0",         # HuggingFace datasets (training corpus loader)
     "nltk>=3.8.0",              # WordNet definitions (training corpus loader)
+    "sentencepiece>=0.1.99",   # required by transformers for MT5Tokenizer (diffusers dep)
 ]
 
 [project.scripts]
