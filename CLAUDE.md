@@ -98,7 +98,7 @@ slot; pooled embedding (1280-dim) is zeros.  See `clip_bridge.format_sdxl_condit
 
 | Key | Dataset |
 |-----|---------|
-| `flickr30k` | `nlphuji/flickr30k` |
+| `flickr30k` | `phiyodr/flickr30k` |
 | `wikipedia` | `wikimedia/wikipedia` |
 | `cc3m` | `google-research-datasets/conceptual_captions` |
 | `wordnet` | NLTK WordNet |
