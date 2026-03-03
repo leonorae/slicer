@@ -2,28 +2,27 @@
 """
 Batch experiment runner for the Diffusion Microscope.
 
-Reads a JSON configuration file and systematically trains projections,
-generates images for all parameter combinations, composes grid images,
-and computes metrics.  Fully checkpointed — re-running resumes from where
-it left off.
+Reads a JSON configuration file and executes the requested phases:
+  train     – train Ridge maps, store SVD spectra
+  generate  – generate probe images for all parameter combinations
+  grids     – compose layer × CFG grid PNGs
+  analyze   – produce erank-vs-layer plots and singular value heatmaps
+  dashboard – write self-contained dashboard.html
+  all       – run every phase in order
 
 Examples
 --------
-# Full run:
-    python run_experiment.py --config experiment_config.example.json
+# Full run (train + generate + grids + analyze + dashboard):
+    python run_experiment.py --config experiment_config.example.json --auto_corpus
 
-# Only train projections, then generate images (resume-friendly):
-    python run_experiment.py --config cfg.json --phase train
-    python run_experiment.py --config cfg.json --phase generate grids
+# Train only (useful when generation is done separately):
+    python run_experiment.py --config cfg.json --phase train --auto_corpus
 
-# Use HF datasets corpus for training texts:
-    python run_experiment.py --config cfg.json --auto_corpus --n_train 5000
+# Analyze already-trained projections (no models needed):
+    python run_experiment.py --config cfg.json --phase analyze dashboard
 
-# Use a GPU:
-    python run_experiment.py --config cfg.json --device cuda
-
-# Skip training (use saved projections) and only compute metrics:
-    python run_experiment.py --config cfg.json --phase metrics
+# Override model and device:
+    python run_experiment.py --config cfg.json --llm gpt2-medium --device cuda
 """
 
 import argparse
@@ -41,27 +40,26 @@ def parse_args() -> argparse.Namespace:
 
     p.add_argument(
         "--config", required=True,
-        help="Path to experiment JSON config file (see experiment_config.example.json)",
+        help="Path to experiment JSON config file",
     )
     p.add_argument(
         "--phase",
         nargs="+",
-        choices=["train", "generate", "grids", "metrics", "animations", "dashboard", "all"],
+        choices=["train", "generate", "grids", "analyze", "dashboard", "all"],
         default=["all"],
         metavar="PHASE",
         help=(
             "Phases to run (space-separated, default: all).\n"
-            "  train      – train all (projection_type × alpha) combinations\n"
-            "  generate   – generate images for all parameter combinations\n"
-            "  grids      – compose per-(projection, probe, seed) grid images\n"
-            "  metrics    – compute LPIPS + image variance\n"
-            "  animations – create layer-sweep GIF animations\n"
-            "  dashboard  – generate self-contained HTML dashboard\n"
-            "  all        – run every phase in order"
+            "  train     – train all (projection_type × alpha) combinations\n"
+            "  generate  – generate images for all parameter combinations\n"
+            "  grids     – compose per-(projection, probe, seed) grid images\n"
+            "  analyze   – erank-vs-layer plots + singular value heatmaps\n"
+            "  dashboard – write self-contained HTML dashboard\n"
+            "  all       – run every phase in order"
         ),
     )
 
-    # Model overrides — also settable under config["models"]
+    # Model overrides
     p.add_argument("--llm", default=None, metavar="MODEL",
                    help="HuggingFace LLM model name (overrides config)")
     p.add_argument("--sd", default=None, metavar="MODEL",
@@ -71,17 +69,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--clip_pretrained", default=None,
                    help="OpenCLIP weights tag (overrides config)")
     p.add_argument("--device", default=None,
-                   help="'cpu' or 'cuda' (overrides config, default: auto-detect)")
+                   help="'cpu' or 'cuda' (overrides config; default: auto-detect)")
     p.add_argument("--cache_dir", default=None,
                    help="Directory for caching LLM training-data activations")
-    p.add_argument(
-        "--write_sidecars", action="store_true", default=False,
-        help="Write per-image JSON sidecar files alongside each image (default: off)",
-    )
-    p.add_argument(
-        "--no_lpips", action="store_true", default=False,
-        help="Disable inline LPIPS computation during image generation",
-    )
 
     # Training corpus
     corpus = p.add_mutually_exclusive_group()
@@ -98,8 +88,9 @@ def parse_args() -> argparse.Namespace:
         help="Training corpus size (overrides config projections.training_data_size)",
     )
     p.add_argument(
-        "--corpus_sources", default="flickr30k,wikipedia,cc3m,wordnet,tinystories",
-        help="Comma-separated sources for --auto_corpus",
+        "--corpus_sources",
+        default="flickr30k,wikipedia,cc3m,wordnet,tinystories",
+        help="Comma-separated corpus sources for --auto_corpus",
     )
 
     return p.parse_args()
@@ -108,7 +99,6 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    # Load config
     config_path = Path(args.config)
     if not config_path.exists():
         print(f"Error: config file not found: {config_path}", file=sys.stderr)
@@ -116,14 +106,12 @@ def main() -> None:
     with open(config_path) as f:
         config = json.load(f)
 
-    # Model settings: config["models"] < CLI flags
+    # Model settings: config["models"] overridden by CLI flags
     model_cfg = config.get("models", {})
     llm_model = args.llm or model_cfg.get("llm", "gpt2")
     sd_model = args.sd or model_cfg.get("sd", "sd-legacy/stable-diffusion-v1-5")
     clip_model = args.clip_model or model_cfg.get("clip_model", "ViT-L-14")
-    clip_pretrained = args.clip_pretrained or model_cfg.get(
-        "clip_pretrained", "openai"
-    )
+    clip_pretrained = args.clip_pretrained or model_cfg.get("clip_pretrained", "openai")
 
     # Device
     device = args.device or model_cfg.get("device")
@@ -133,21 +121,16 @@ def main() -> None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         except ImportError:
             device = "cpu"
-    print(f"Device: {device}")
 
-    # Training corpus size
-    n_train = args.n_train or config.get("projections", {}).get(
-        "training_data_size", 5000
-    )
+    # Override n_train in config if provided
+    if args.n_train is not None:
+        config.setdefault("projections", {})["training_data_size"] = args.n_train
 
     # Training texts
     if args.training_texts_file:
         texts_path = Path(args.training_texts_file)
         if not texts_path.exists():
-            print(
-                f"Error: training texts file not found: {texts_path}",
-                file=sys.stderr,
-            )
+            print(f"Error: file not found: {texts_path}", file=sys.stderr)
             sys.exit(1)
         training_texts = [
             line.strip()
@@ -167,28 +150,33 @@ def main() -> None:
                 file=sys.stderr,
             )
             sys.exit(1)
+        n_train = config.get("projections", {}).get("training_data_size", 5000)
         print(f"Building auto corpus: n={n_train}, sources={sources_raw}")
-        training_texts = load_training_corpus(
-            n_total=n_train, sources=tuple(sources_raw)
-        )
+        training_texts = load_training_corpus(n_total=n_train, sources=tuple(sources_raw))
 
     else:
-        from run_microscope import DEFAULT_TRAINING_TEXTS
-
-        training_texts = DEFAULT_TRAINING_TEXTS
+        # Minimal built-in fallback
+        training_texts = [
+            "a cat on a roof",
+            "a dog in a field",
+            "a red apple on a white table",
+            "the ocean at sunset",
+            "a mountain covered in snow",
+        ]
         print(
             f"Using {len(training_texts)} built-in training texts "
-            f"(consider --auto_corpus for better results)"
+            "(pass --auto_corpus for better results)"
         )
 
-    # Resolve phases
     phases = args.phase
-    if "all" in phases:
-        phases = ["train", "generate", "grids", "metrics", "animations", "dashboard"]
-    print(f"Phases : {phases}")
-    print(f"Config : {config_path}")
-    print(f"Output : {config.get('output', {}).get('base_dir', './experiment_results')}")
-    print()
+    base_dir = config.get("output", {}).get("base_dir", "./experiment_results")
+
+    print(f"\nConfig  : {config_path}")
+    print(f"LLM     : {llm_model}")
+    print(f"SD      : {sd_model}")
+    print(f"Device  : {device}")
+    print(f"Output  : {base_dir}")
+    print(f"Phases  : {phases}\n")
 
     from diffusion_microscope.experiment import ExperimentRunner
 
@@ -200,26 +188,19 @@ def main() -> None:
         clip_pretrained=clip_pretrained,
         device=device,
         cache_dir=args.cache_dir,
-        write_sidecars=args.write_sidecars,
-        track_lpips=not args.no_lpips,
     )
 
     results = runner.run(training_texts=training_texts, phases=phases)
 
     manifest = results["manifest"]
-    n_images = len(manifest.get("images", {}))
-    n_grids = len(manifest.get("grids", {}))
-    n_anims = len(manifest.get("animations", {}))
-    dash_path = results["base_dir"] + "/dashboard.html"
     print(f"\n{'='*60}")
     print(f"Experiment complete")
-    print(f"Output     : {results['base_dir']}")
-    print(f"Images     : {n_images}")
-    print(f"Grids      : {n_grids}")
-    if n_anims:
-        print(f"Animations : {n_anims}")
-    if "dashboard" in phases:
-        print(f"Dashboard  : {dash_path}")
+    print(f"Output       : {results['base_dir']}")
+    print(f"Projections  : {len(manifest.get('projections', {}))}")
+    print(f"Images       : {len(manifest.get('images', {}))}")
+    print(f"Grids        : {len(manifest.get('grids', {}))}")
+    if "dashboard" in phases or "all" in phases:
+        print(f"Dashboard    : {results['base_dir']}/dashboard.html")
 
 
 if __name__ == "__main__":
