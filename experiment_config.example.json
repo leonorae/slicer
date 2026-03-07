@@ -1,0 +1,35 @@
+{
+  "_comment": "Diffusion Microscope experiment config. Copy and edit this file.",
+
+  "models": {
+    "llm": "gpt2",
+    "sd": "sd-legacy/stable-diffusion-v1-5",
+    "clip_model": "ViT-L-14",
+    "clip_pretrained": "openai"
+  },
+
+  "projections": {
+    "_comment": "per_layer is the primary mode for Phase 0 erank analysis.",
+    "types": ["per_layer"],
+    "alpha_values": [1, 10, 100],
+    "training_data_size": 5000
+  },
+
+  "probe_texts": {
+    "concrete":  ["a cat on a roof", "a dog", "a house", "a tree"],
+    "abstract":  ["therefore", "irony", "democracy", "beauty"],
+    "function":  ["the", "and", "but", "however"]
+  },
+
+  "layers": null,
+
+  "cfg_values": [3.0, 7.5, 12.0],
+  "seeds": [42],
+
+  "output": {
+    "base_dir": "./experiment_results",
+    "image_format": "png"
+  },
+
+  "use_auto_corpus": true
+}

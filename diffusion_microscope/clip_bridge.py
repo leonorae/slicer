@@ -21,6 +21,10 @@ from typing import Optional, Tuple
 
 import numpy as np
 
+# SDXL uses two CLIP encoders whose outputs are concatenated per token.
+_SDXL_SEQ_DIM = 2048    # ViT-L/14 (768) + ViT-bigG/14 (1280) per token
+_SDXL_POOL_DIM = 1280   # ViT-bigG/14 pooled EOS embedding
+
 
 def extract_clip_text_embeddings(
     texts: list[str],
@@ -129,9 +133,14 @@ def extract_llm_last_token_activations(
         attention_mask = enc["attention_mask"]  # (batch, seq_len)
 
         for i in range(len(batch_texts)):
-            # Last real token position (before padding)
-            real_len = int(attention_mask[i].sum().item())
-            last_pos = real_len - 1
+            # Last real token position — depends on padding side.
+            # Right-padding (GPT-2, Pythia, …): real tokens are at the start.
+            # Left-padding  (OPT, …):            real tokens are at the end.
+            if getattr(tokenizer, "padding_side", "right") == "left":
+                last_pos = enc["input_ids"].shape[1] - 1
+            else:
+                real_len = int(attention_mask[i].sum().item())
+                last_pos = real_len - 1
 
             for layer_idx in layers:
                 if layer_idx < len(out.hidden_states):
@@ -180,3 +189,42 @@ def format_sd_conditioning(
     negative_embeds = np.zeros_like(prompt_embeds)
 
     return prompt_embeds, negative_embeds
+
+
+def format_sdxl_conditioning(
+    projected_embedding: np.ndarray,
+    seq_len: int = 77,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Format a single CLIP-space vector into SDXL-compatible conditioning tensors.
+
+    SDXL requires two conditioning signals:
+      - prompt_embeds        : (batch, seq_len, 2048) — our vector zero-padded to 2048
+      - pooled_prompt_embeds : (batch, 1280)          — zeros (no ViT-bigG encoder)
+
+    Parameters
+    ----------
+    projected_embedding : (clip_dim,) or (batch, clip_dim)
+    seq_len             : token sequence length (77 for SDXL)
+
+    Returns
+    -------
+    (prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled)
+    """
+    emb = np.asarray(projected_embedding, dtype=np.float32)
+    if emb.ndim == 1:
+        emb = emb[np.newaxis]  # (1, clip_dim)
+
+    batch, dim = emb.shape
+
+    # Pad our clip_dim vector to 2048 for sequence conditioning
+    pad_seq = max(0, _SDXL_SEQ_DIM - dim)
+    emb_padded = np.pad(emb, ((0, 0), (0, pad_seq)))[:, :_SDXL_SEQ_DIM]
+    prompt_embeds = np.tile(emb_padded[:, np.newaxis, :], (1, seq_len, 1))
+    negative_embeds = np.zeros_like(prompt_embeds)
+
+    # Pooled: zeros — we don't have a ViT-bigG encoder
+    pooled = np.zeros((batch, _SDXL_POOL_DIM), dtype=np.float32)
+    neg_pooled = np.zeros_like(pooled)
+
+    return prompt_embeds, negative_embeds, pooled, neg_pooled
