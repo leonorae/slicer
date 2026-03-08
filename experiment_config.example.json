@@ -11,7 +11,7 @@
   "projections": {
     "_comment": "per_layer is the primary mode for Phase 0 erank analysis.",
     "types": ["per_layer"],
-    "alpha_values": [1, 10, 100],
+    "alpha_values": ["auto", 1, 10, 100, 1000],
     "training_data_size": 5000
   },
 
