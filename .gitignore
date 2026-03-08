@@ -9,3 +9,6 @@ build/
 .env
 *.log
 outputs/
+
+# Experiment run artifacts (large numpy arrays, generated images, model weights)
+experiment_results/
