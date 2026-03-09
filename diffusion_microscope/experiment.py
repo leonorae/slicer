@@ -181,7 +181,7 @@ class ExperimentRunner:
         if self._sd is None:
             from .generator import DiffusionMicroscope
             print(f"Loading SD: {self.sd_model}")
-            self._sd = DiffusionMicroscope(model_id=self.sd_model, device=self.device)
+            self._sd = DiffusionMicroscope(sd_model_id=self.sd_model, device=self.device)
         return self._sd
 
     # ------------------------------------------------------------------

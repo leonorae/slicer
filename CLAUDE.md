@@ -51,12 +51,9 @@ uv pip install -e .
 
 ```bash
 python run_microscope.py --probe "a cat on a roof"
-python run_microscope.py --auto_corpus --n_train 5000 --probe "democracy"
 python run_experiment.py --config experiment_config.example.json --auto_corpus
 python run_experiment.py --config experiment_config.example.json --phase dashboard
 ```
-
-See `README.md` for full command reference.
 
 ## Projection modes
 
@@ -70,18 +67,17 @@ See `README.md` for full command reference.
 
 ## Supported LLMs
 
-Any `AutoModelForCausalLM`.  Right-padding models work out of the box.
-Left-padding models (OPT) are handled in `clip_bridge.py` via `tokenizer.padding_side`.
+Any `AutoModelForCausalLM`. Left-padding models (OPT) handled in `clip_bridge.py`.
 
-| Model | HF ID | Notes |
-|-------|-------|-------|
-| GPT-2 | `gpt2` | Default, fast on CPU |
-| GPT-2 Medium/Large | `gpt2-medium`, `gpt2-large` | |
-| Pythia-70M–1B | `EleutherAI/pythia-{70m,160m,410m,1b}` | |
-| OPT-125M–1.3B | `facebook/opt-{125m,350m,1.3b}` | Left-padding |
-| TinyLlama | `TinyLlama/TinyLlama-1.1B-Chat-v1.0` | |
-| SmolLM2 | `HuggingFaceTB/SmolLM2-{135M,360M}` | |
-| Qwen2-0.5B | `Qwen/Qwen2-0.5B` | |
+| Model | HF ID |
+|-------|-------|
+| GPT-2 | `gpt2` |
+| GPT-2 Medium/Large | `gpt2-medium`, `gpt2-large` |
+| Pythia-70M–1B | `EleutherAI/pythia-{70m,160m,410m,1b}` |
+| OPT-125M–1.3B | `facebook/opt-{125m,350m,1.3b}` |
+| TinyLlama | `TinyLlama/TinyLlama-1.1B-Chat-v1.0` |
+| SmolLM2 | `HuggingFaceTB/SmolLM2-{135M,360M}` |
+| Qwen2-0.5B | `Qwen/Qwen2-0.5B` |
 
 ## Supported SD models
 
@@ -92,7 +88,7 @@ Left-padding models (OPT) are handled in `clip_bridge.py` via `tokenizer.padding
 | SDXL Turbo | `stabilityai/sdxl-turbo` | Auto-detected by `"xl"` in ID; 4 steps, CFG=0 |
 
 SDXL conditioning: 768-dim projection is zero-padded to 2048 for the sequence
-slot; pooled embedding (1280-dim) is zeros.  See `clip_bridge.format_sdxl_conditioning`.
+slot; pooled embedding (1280-dim) is zeros.
 
 ## Training corpus sources
 
@@ -105,22 +101,22 @@ slot; pooled embedding (1280-dim) is zeros.  See `clip_bridge.format_sdxl_condit
 | `tinystories` | `roneneldan/TinyStories` |
 
 To add a source: add `_load_mysource(n) -> list[str]` to `training_data.py`,
-register in `_LOADERS` and `ALL_SOURCES`.  Failures skip gracefully.
+register in `_LOADERS` and `ALL_SOURCES`.
 
 ## Experiment output structure
 
 ```
 experiment_results/
-├── manifest.json                        # All files + metrics (checkpointing key)
-├── dashboard.html                       # Generated HTML viewer
+├── manifest.json                        # Checkpointing key
+├── dashboard.html
 ├── configs/config_{ts}.json
 ├── projections/{proj_key}/
 ├── grids/by_projection/{proj_key}/{text_slug}/
 │   ├── per_layer/L{N}_CFG{v}_seed{s}.png
 │   ├── grid_seed{s}.png
 │   └── anim_CFG{v}_seed{s}.gif
-├── grids/by_text/{text_slug}/           # Symlinks for cross-projection browsing
-└── .probe_cache/{slug}/layer_{N}.npy   # Cached LLM activations per probe text
+├── grids/by_text/{text_slug}/           # Symlinks
+└── .probe_cache/{slug}/layer_{N}.npy
 ```
 
 ## Experiment phases
@@ -130,7 +126,7 @@ experiment_results/
 | `train` | Fit all (projection_type × alpha) combinations |
 | `generate` | Render all (proj × probe × layer × CFG × seed) images |
 | `grids` | Compose layer × CFG grid PNGs |
-| `metrics` | Post-hoc LPIPS + image variance over all images |
+| `metrics` | Post-hoc LPIPS + image variance |
 | `animations` | Layer-sweep GIFs per (proj, text, CFG, seed) |
 | `dashboard` | Write `dashboard.html` |
 
@@ -140,13 +136,44 @@ the post-hoc `metrics` phase.
 
 ## Architecture notes
 
-- **Linearity is intentional** — Ridge preserves geometry.  The projection is
-  not a feature extractor; it's a linear readout of whatever geometry already
-  exists in the LLM's representation space.
-- **No fine-tuning** — SD and CLIP are completely frozen.  The only trained
-  component is the small Ridge map (~hidden_dim × 768 parameters).
+- **Linearity is intentional** — Ridge preserves geometry; it's a linear readout,
+  not a feature extractor.
+- **No fine-tuning** — SD and CLIP are completely frozen.  Only the Ridge map
+  is trained (~hidden_dim × 768 parameters).
 - **Probe cache** — `.probe_cache/` stores per-(text, layer) numpy arrays so
-  the LLM only runs once per probe set, regardless of how many projections or
-  CFG values are swept.
-- **Manifest** — `manifest.json` is the single source of truth for what has
-  been generated.  Every phase reads it before starting to skip completed work.
+  the LLM only runs once per probe set.
+- **Manifest** — `manifest.json` is the single source of truth for completed work.
+
+## Observed results (GPT-2, 2 experiments)
+
+> **Caveat:** All findings below come from only two experiment runs with GPT-2.
+> Generalisation to other models is untested.
+
+### Geometry (from `analyze` phase)
+
+- **All 12 layers are full-rank** relative to the 768-dim CLIP target.  No dead
+  zones; every layer in principle carries projectable signal.
+- **Effective rank (erank) peaks at mid layers (~6–8)** and is lowest at layer 0
+  and layer 11.  Early layers are spiky (signal concentrated in ~50 directions);
+  late layers broaden but shrink in overall variance.
+- **Singular value spectra** are smooth and decay gradually — no cliff edges.
+  This means the projection is well-conditioned and alpha choice affects magnitude
+  uniformly rather than selectively.
+
+### Alpha behaviour (observed)
+
+- `alpha=1` and `alpha=10` produce the most layer-discriminative outputs.
+- `alpha=1000` and `auto` collapse per-layer differences — layer sweeps look
+  visually homogeneous.
+- `auto` (RidgeCV) selected high alpha values, favouring stability over
+  expressiveness in this corpus size.
+
+### Known limitations
+
+- Only 2 experiment runs completed.  Effect sizes are not yet confirmed as stable.
+- Training corpus was small (< 5000 samples in both runs).  Larger corpora may
+  shift the alpha → quality relationship.
+- GPT-2 only.  Mid-layer erank peak and early-layer spikiness may not generalise
+  to deeper or instruction-tuned models.
+- `generate` phase with non-GPT-2 models was blocked by a `model_id` kwarg bug
+  (now fixed in `experiment.py:_load_sd`).
