@@ -640,6 +640,40 @@ class ExperimentRunner:
             plt.close(fig)
             print(f"  Saved: {heat_path}")
 
+            # --- Plot: singular value curves for representative layers ---
+            # Pick ~8 evenly spaced layers so the plot doesn't get too crowded.
+            n_layers = len(layers_loaded)
+            if n_layers <= 8:
+                selected_indices = list(range(n_layers))
+            else:
+                step = (n_layers - 1) / 7
+                selected_indices = sorted(set(round(i * step) for i in range(8)))
+
+            cmap_lines = plt.get_cmap("plasma")
+            fig, ax = plt.subplots(figsize=(10, 5))
+            for rank, i in enumerate(selected_indices):
+                s = spectra[i]
+                color = cmap_lines(rank / max(len(selected_indices) - 1, 1))
+                ax.plot(
+                    np.arange(len(s)),
+                    s,
+                    linewidth=1.2,
+                    color=color,
+                    label=f"layer {layers_loaded[i]}",
+                )
+
+            ax.set_yscale("log")
+            ax.set_xlabel("Singular value index $k$")
+            ax.set_ylabel("$\\sigma_k$ (log scale)")
+            ax.set_title(f"Singular Value Spectra — {key}")
+            ax.legend(fontsize=7, loc="upper right", ncol=2)
+            ax.grid(True, alpha=0.3, which="both")
+            fig.tight_layout()
+            lines_path = self.analysis_dir / f"spectrum_lines_{key}.png"
+            fig.savefig(str(lines_path), dpi=150)
+            plt.close(fig)
+            print(f"  Saved: {lines_path}")
+
         # --- erank_summary.json ---
         summary_path = self.analysis_dir / "erank_summary.json"
         # Convert int keys to str for JSON serialisation
