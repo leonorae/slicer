@@ -6,7 +6,7 @@ and returns a shuffled list ready for prepare_training_data().
 
 Sources
 -------
-flickr30k   Flickr 30k Captions  – concrete visual scene descriptions (phiyodr/flickr30k)
+flickr30k   Flickr 30k Captions  – concrete visual scene descriptions (sentence-transformers/flickr30k-captions)
 wikipedia   Wikipedia (English)  – encyclopaedic / abstract prose
 cc3m        Conceptual Captions  – diverse web image alt-text
 wordnet     WordNet (via NLTK)   – short definitions of abstract nouns
@@ -39,21 +39,19 @@ _SENT_RE = re.compile(r"(?<=[.!?])\s+")
 def _load_flickr30k(n: int) -> list[str]:
     from datasets import load_dataset  # type: ignore
 
-    # phiyodr/flickr30k uses plain parquet (no database loading script).
-    # Schema: each row has a 'sentences' list of dicts with a 'raw' caption key.
+    # sentence-transformers/flickr30k-captions: flat rows with a 'caption' string column.
     ds = load_dataset(
-        "phiyodr/flickr30k",
+        "sentence-transformers/flickr30k-captions",
         split="train",
         streaming=True,
     )
     texts: list[str] = []
     for row in ds:
-        for sent in row.get("sentences") or []:
-            cap = (sent.get("raw") if isinstance(sent, dict) else sent or "").strip()
-            if cap:
-                texts.append(cap)
-            if len(texts) >= n:
-                return texts
+        cap = (row.get("caption") or "").strip()
+        if cap:
+            texts.append(cap)
+        if len(texts) >= n:
+            return texts
     return texts
 
 
