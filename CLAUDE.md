@@ -257,3 +257,103 @@ A second run with `EleutherAI/pythia-410m` produced meaningfully different geome
   projections from metric data only.
 - `generate` phase with non-GPT-2 models was blocked by a `model_id` kwarg bug
   (now fixed in `experiment.py:_load_sd`).
+
+---
+
+## Planned experiments
+
+Three experiments in priority order, each with a config file ready to run.
+All use the existing 5000-sample trained projections — only the `generate` and
+`grids` phases need running (train phase is already done).
+
+### Exp 1 — Alpha compression visibility
+
+**Goal:** Validate that nn_recall@5 predicts visual discriminability.
+**Hypothesis:** alpha=1 images are more distinct per probe than alpha=1000 images.
+LPIPS between alpha=1 and alpha=1000 for the same prompt quantifies how much
+information the compressor destroys.
+
+**Design:**
+- Models: GPT-2 (last layer L11) and Pythia-410m (last layer L23) — run separately
+- Alpha: 1 and 1000 (extremes only)
+- Probe set: concrete + abstract (see configs)
+- CFG: 7.5 only (one value to keep output manageable)
+- Seeds: 42, 123, 777 (3 seeds for stability)
+- Layers: last layer only (`layers: [11]` for GPT-2, `[23]` for Pythia)
+
+**Analysis:** For each probe, compute LPIPS(alpha=1 image, alpha=1000 image).
+If nn_recall@5 is a good proxy for visual discriminability, LPIPS should be
+higher for abstract prompts (lower nn_recall at high alpha) than concrete ones.
+
+**Configs:** `experiment_config_exp1_gpt2.json`, `experiment_config_exp1_pythia.json`
+**Commands:**
+```bash
+python run_experiment.py --config experiment_config_exp1_gpt2.json --phase generate
+python run_experiment.py --config experiment_config_exp1_gpt2.json --phase grids
+python run_experiment.py --config experiment_config_exp1_pythia.json --phase generate
+python run_experiment.py --config experiment_config_exp1_pythia.json --phase grids
+```
+
+---
+
+### Exp 2 — L0→L1 bottleneck in Pythia
+
+**Goal:** Visually characterise what the first Pythia transformer layer discards.
+**Background:** At alpha=1000, Pythia L0 has the highest erank (494) and L1 dips
+to 478. Opus interpreted this as a bottleneck-then-expansion architecture. **Caveat:**
+this pattern only holds at high alpha; at alpha=1, L0 is the *lowest* erank point.
+The experiment tests whether the erank dip is visually significant.
+
+**Design:**
+- Model: Pythia-410m (GPT-2 L0 is rank-deficient at alpha=1 — unusable)
+- Alpha: 1 only (preserves topology; L0 at alpha=1 is well-conditioned for Pythia)
+- Layers: 0, 1, 2, 3 (first four, to see trajectory not just endpoints)
+- Same probe set as Exp 1
+
+**Analysis:** Layer-sweep images L0→L3 for each probe. What changes between L0
+and L1? Is L0 more diffuse/abstract and L1 more structured? Does the visual
+transition match the erank drop?
+
+**Config:** `experiment_config_exp2_pythia.json`
+**Commands:**
+```bash
+python run_experiment.py --config experiment_config_exp2_pythia.json --phase generate
+python run_experiment.py --config experiment_config_exp2_pythia.json --phase grids
+```
+
+---
+
+### Exp 3 — Alpha sensitivity as novelty detector
+
+**Goal:** Test whether alpha sensitivity correlates with prompt unusualness.
+**Hypothesis:** Unusual prompts have distinguishing information concentrated in
+low-variance (high-noise) directions that high alpha kills. Common prompts live
+near the corpus mean — their projection is insensitive to alpha compression.
+
+**Design:**
+- Probe set: three tiers explicitly labelled by expected unusualness:
+  - *Common-concrete* (should be alpha-insensitive): "a cat", "a dog", "a house"
+  - *Common-abstract* (moderate sensitivity): "democracy", "justice", "beauty"
+  - *Unusual* (should be alpha-sensitive): "the feeling of almost remembering",
+    "the color of Tuesday", "entropy at midnight"
+- Alpha: 1 and 1000
+- Models: both (cross-model check is the key result)
+- Layers: last layer of each model
+- Seeds: 42, 123, 777
+
+**Analysis:** LPIPS(alpha=1, alpha=1000) per probe. Test whether LPIPS ranks
+probes by tier: unusual > common-abstract > common-concrete.
+
+**Confound to watch:** low-variance directions in the *projection* ≠ semantically
+unusual prompts — they could be directions with sparse corpus coverage. The
+experiment tests the surface correlation; a follow-up would compare against
+activation-space distance from the corpus centroid as an independent novelty measure.
+
+**Configs:** `experiment_config_exp3_gpt2.json`, `experiment_config_exp3_pythia.json`
+**Commands:**
+```bash
+python run_experiment.py --config experiment_config_exp3_gpt2.json --phase generate
+python run_experiment.py --config experiment_config_exp3_gpt2.json --phase grids
+python run_experiment.py --config experiment_config_exp3_pythia.json --phase generate
+python run_experiment.py --config experiment_config_exp3_pythia.json --phase grids
+```
