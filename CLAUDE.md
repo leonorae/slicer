@@ -215,11 +215,45 @@ the post-hoc `metrics` phase.
   distinct images. Consider alpha=1 or alpha=10 for generation; use alpha=1000
   only if stability across layers matters more than discriminability.
 
+### Pythia-410m results (24 layers, 5000-sample corpus)
+
+A second run with `EleutherAI/pythia-410m` produced meaningfully different geometry.
+
+**Key differences from GPT-2:**
+
+- **No singular layers.** All 24 layers are well-conditioned at every alpha
+  (condition numbers ~48M–195M throughout). The L0 singularity observed in GPT-2
+  does not appear in Pythia-410m.
+- **n_visible = 767/768 for every layer and every alpha** — full coverage of CLIP
+  space without exception.
+- **Higher absolute erank across the board.** At alpha=1, GPT-2 L0 erank=200;
+  Pythia-410m L0 erank=354. The whole distribution is shifted toward higher rank.
+- **Erank profile is non-monotonic at high alpha.** At alpha=1000, L0 has the
+  *highest* erank (494), L1 dips to 478, then rises gradually to ~497 at L20+.
+  This L0-peak / L1-dip pattern is absent at low alpha and likely reflects
+  alpha's differential effect on the embedding layer vs. transformer layers.
+- **At alpha=1, erank increases rapidly through early layers** (L0=354 → L6=455)
+  then plateaus and slightly drops at L22-23 (~480). Not a clean monotone.
+- **R² vs nn_recall tension holds:** auto again selected alpha=1000 for all layers;
+  alpha=1 gives substantially better nn_recall@5 (L23: 0.688 vs 0.570).
+- **Pythia outperforms GPT-2 on nn_recall at high alpha**: Pythia L23 α=1000:
+  nn_recall=0.570 vs GPT-2 L11 α=1000: nn_recall=0.517.
+
+**Cross-model summary:**
+
+| Property | GPT-2 (12L) | Pythia-410m (24L) |
+|---|---|---|
+| L0 singularity at low α | Yes (∞ cond.) | No (~150M cond.) |
+| Erank at L0, α=1 | 200 | 354 |
+| Erank at last layer, α=1 | 422 | 480 |
+| Erank profile (α=1) | Monotone increasing | Rise → plateau, slight drop |
+| Erank profile (α=1000) | Monotone increasing | L0 peak, L1 dip, then rise |
+| Best nn_recall (α=1) | L11: 0.686 | L23: 0.688 |
+| RidgeCV selection | α=1000, all layers | α=1000, all layers |
+
 ### Known limitations
 
-- GPT-2 only. Monotonic erank growth and L0 singularity may not generalise to
-  other architectures.
-- No images generated yet from the 5000-sample run. Visual claims are projections
-  from metric data only.
+- No images generated yet from either 5000-sample run. Visual claims are
+  projections from metric data only.
 - `generate` phase with non-GPT-2 models was blocked by a `model_id` kwarg bug
   (now fixed in `experiment.py:_load_sd`).
