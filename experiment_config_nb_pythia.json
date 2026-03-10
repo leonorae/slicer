@@ -1,0 +1,45 @@
+{
+  "_comment": "Notebook consolidated config — Pythia-410m, all Exp 1+2+3 probes, alpha=1 and 1000, layers 0-3 and last layer.",
+  "_covers": [
+    "Exp 1 (alpha compression visibility, L23)",
+    "Exp 2 (L0→L1 bottleneck, L0-3 at alpha=1; alpha=1000 at early layers is bonus data)",
+    "Exp 3 (alpha sensitivity as novelty detector, L23)"
+  ],
+
+  "models": {
+    "llm": "EleutherAI/pythia-410m",
+    "sd": "sd-legacy/stable-diffusion-v1-5",
+    "clip_model": "ViT-L-14",
+    "clip_pretrained": "openai"
+  },
+
+  "projections": {
+    "types": ["per_layer"],
+    "alpha_values": [1, 1000],
+    "training_data_size": 5000
+  },
+
+  "probe_texts": {
+    "concrete":        ["a cat", "a dog", "a house", "a tree"],
+    "abstract":        ["democracy", "justice", "entropy", "grief"],
+    "common_concrete": ["a cat", "a dog", "a house"],
+    "common_abstract": ["democracy", "justice", "beauty"],
+    "unusual":         [
+      "the feeling of almost remembering",
+      "the color of Tuesday",
+      "entropy at midnight"
+    ]
+  },
+
+  "layers": [0, 1, 2, 3, 23],
+
+  "cfg_values": [7.5],
+  "seeds": [42, 123, 777],
+
+  "output": {
+    "base_dir": "./experiment_results_nb_pythia",
+    "image_format": "png"
+  },
+
+  "use_auto_corpus": true
+}
