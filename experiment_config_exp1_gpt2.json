@@ -1,0 +1,33 @@
+{
+  "_comment": "Exp 1: Alpha compression visibility — GPT-2, last layer only.",
+
+  "models": {
+    "llm": "gpt2",
+    "sd": "sd-legacy/stable-diffusion-v1-5",
+    "clip_model": "ViT-L-14",
+    "clip_pretrained": "openai"
+  },
+
+  "projections": {
+    "types": ["per_layer"],
+    "alpha_values": [1, 1000],
+    "training_data_size": 5000
+  },
+
+  "probe_texts": {
+    "concrete":  ["a cat", "a dog", "a house", "a tree"],
+    "abstract":  ["democracy", "justice", "entropy", "grief"]
+  },
+
+  "layers": [11],
+
+  "cfg_values": [7.5],
+  "seeds": [42, 123, 777],
+
+  "output": {
+    "base_dir": "./experiment_results_exp1_gpt2",
+    "image_format": "png"
+  },
+
+  "use_auto_corpus": true
+}

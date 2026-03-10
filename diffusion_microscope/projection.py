@@ -55,6 +55,13 @@ class LinearProjection:
     alpha : Ridge regularisation strength.  Higher → smoother, more generalised
             map; lower → closer fit to training pairs but risk of overfitting
             and mode collapse in generated images.
+
+    After fitting, the SVD of W is computed automatically:
+        W = U S Vt   (thin SVD, full_matrices=False)
+    The singular value spectrum S is stored as S.npy alongside W.npy, and the
+    right singular vectors Vt are stored as Vt.npy (needed for Phase 2 null
+    space analysis).  Properties erank, condition_number, and n_visible expose
+    the key scalars computed from S.
     """
 
     def __init__(self, alpha: float = 1.0):
@@ -64,6 +71,9 @@ class LinearProjection:
         self.scaler_mean: Optional[np.ndarray] = None   # (llm_dim,)
         self.scaler_scale: Optional[np.ndarray] = None  # (llm_dim,)
         self._meta: Dict = {}
+        # SVD of W — populated by fit() and load()
+        self._S: Optional[np.ndarray] = None    # (k,) singular values, k=min(clip,llm)
+        self._Vt: Optional[np.ndarray] = None   # (k, llm_dim) right singular vectors
 
     # ------------------------------------------------------------------
     # Training
@@ -119,6 +129,21 @@ class LinearProjection:
         self.W = reg.coef_.astype(np.float32)      # (clip_dim, llm_dim)
         self.b = reg.intercept_.astype(np.float32)  # (clip_dim,)
 
+        # SVD of W for Phase 0 (erank) and Phase 2 (null space).
+        # Computed in float64 for numerical accuracy, stored in float32.
+        _U, _S, _Vt = np.linalg.svd(self.W.astype(np.float64), full_matrices=False)
+        self._S = _S.astype(np.float32)    # shape (min(clip_dim, llm_dim),)
+        self._Vt = _Vt.astype(np.float32)  # shape (min(...), llm_dim)
+
+        from .analysis import effective_rank, spectrum_noise_floor
+        _erank = effective_rank(self._S)
+        _n_vis = spectrum_noise_floor(self._S)
+        _cond = (
+            float(self._S[0] / self._S[-1])
+            if float(self._S[-1]) > 1e-10
+            else float("inf")
+        )
+
         self._meta = {
             "n_train": int(X.shape[0]),
             "llm_dim": int(X.shape[1]),
@@ -126,9 +151,32 @@ class LinearProjection:
             "alpha": float(self.alpha),
             "normalize_llm": normalize_llm,
             "normalize_clip": normalize_clip,
+            # Phase 0 geometric properties
+            "erank": _erank,
+            "condition_number": _cond,
+            "n_visible": _n_vis,
         }
 
         return self
+
+    # ------------------------------------------------------------------
+    # SVD / geometric properties  (Phase 0)
+    # ------------------------------------------------------------------
+
+    @property
+    def singular_values(self) -> Optional[np.ndarray]:
+        """Singular values of W in descending order, shape (k,).  None if not fitted."""
+        return self._S
+
+    @property
+    def erank(self) -> Optional[float]:
+        """Shannon-entropy effective rank of W.  None if not fitted."""
+        return self._meta.get("erank") if self._meta else None
+
+    @property
+    def condition_number(self) -> Optional[float]:
+        """Condition number of W (sigma_max / sigma_min).  None if not fitted."""
+        return self._meta.get("condition_number") if self._meta else None
 
     # ------------------------------------------------------------------
     # Inference
@@ -219,7 +267,7 @@ class LinearProjection:
     # ------------------------------------------------------------------
 
     def save(self, directory: str) -> str:
-        """Save projection weights and metadata to *directory*."""
+        """Save projection weights, SVD spectra, and metadata to *directory*."""
         d = Path(directory)
         d.mkdir(parents=True, exist_ok=True)
 
@@ -227,6 +275,12 @@ class LinearProjection:
         np.save(d / "b.npy", self.b)
         np.save(d / "scaler_mean.npy", self.scaler_mean)
         np.save(d / "scaler_scale.npy", self.scaler_scale)
+
+        # SVD arrays for Phase 0 (erank) and Phase 2 (null space)
+        if self._S is not None:
+            np.save(d / "S.npy", self._S)
+        if self._Vt is not None:
+            np.save(d / "Vt.npy", self._Vt)
 
         with open(d / "meta.json", "w") as f:
             json.dump(self._meta, f, indent=2)
@@ -242,6 +296,13 @@ class LinearProjection:
         proj.b = np.load(d / "b.npy")
         proj.scaler_mean = np.load(d / "scaler_mean.npy")
         proj.scaler_scale = np.load(d / "scaler_scale.npy")
+
+        # Load SVD arrays if present (absent in projections saved before Phase 0)
+        s_path, vt_path = d / "S.npy", d / "Vt.npy"
+        if s_path.exists():
+            proj._S = np.load(s_path)
+        if vt_path.exists():
+            proj._Vt = np.load(vt_path)
 
         meta_path = d / "meta.json"
         if meta_path.exists():

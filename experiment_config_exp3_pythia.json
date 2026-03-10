@@ -1,0 +1,39 @@
+{
+  "_comment": "Exp 3: Alpha sensitivity as novelty detector — Pythia-410m, last layer.",
+  "_hypothesis": "LPIPS(alpha=1, alpha=1000) should rank: unusual > common-abstract > common-concrete.",
+
+  "models": {
+    "llm": "EleutherAI/pythia-410m",
+    "sd": "sd-legacy/stable-diffusion-v1-5",
+    "clip_model": "ViT-L-14",
+    "clip_pretrained": "openai"
+  },
+
+  "projections": {
+    "types": ["per_layer"],
+    "alpha_values": [1, 1000],
+    "training_data_size": 5000
+  },
+
+  "probe_texts": {
+    "common_concrete": ["a cat", "a dog", "a house"],
+    "common_abstract": ["democracy", "justice", "beauty"],
+    "unusual":         [
+      "the feeling of almost remembering",
+      "the color of Tuesday",
+      "entropy at midnight"
+    ]
+  },
+
+  "layers": [23],
+
+  "cfg_values": [7.5],
+  "seeds": [42, 123, 777],
+
+  "output": {
+    "base_dir": "./experiment_results_exp3_pythia",
+    "image_format": "png"
+  },
+
+  "use_auto_corpus": true
+}

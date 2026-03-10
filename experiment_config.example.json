@@ -9,27 +9,22 @@
   },
 
   "projections": {
-    "types": ["single_final_layer", "mixed_layer"],
-    "alpha_values": [1, 10, 100, 1000, 10000],
+    "_comment": "per_layer is the primary mode for Phase 0 erank analysis.",
+    "types": ["per_layer"],
+    "alpha_values": ["auto", 1, 10, 100, 1000],
     "training_data_size": 5000
   },
 
   "probe_texts": {
-    "concrete":  ["a cat on a roof", "a dog", "a house", "a tree", "a car"],
-    "abstract":  ["therefore", "irony", "democracy", "causality", "beauty"],
-    "function":  ["the", "and", "but", "however", "because"],
-    "novel":     ["purple elephant", "singing skyscraper", "quantum turtle",
-                  "liquid glass", "frozen lightning"],
-    "interpolations": [
-      {"from": "cat", "to": "dog",   "steps": 5},
-      {"from": "king", "to": "queen", "steps": 5}
-    ]
+    "concrete":  ["a cat on a roof", "a dog", "a house", "a tree"],
+    "abstract":  ["therefore", "irony", "democracy", "beauty"],
+    "function":  ["the", "and", "but", "however"]
   },
 
   "layers": null,
 
-  "cfg_values": [1.5, 3.0, 5.0, 7.0, 9.0, 12.0, 15.0],
-  "seeds": [42, 43, 44],
+  "cfg_values": [3.0, 7.5, 12.0],
+  "seeds": [42],
 
   "output": {
     "base_dir": "./experiment_results",

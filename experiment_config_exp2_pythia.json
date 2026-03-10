@@ -1,0 +1,34 @@
+{
+  "_comment": "Exp 2: L0→L1 bottleneck — Pythia-410m, first four layers, alpha=1 only.",
+  "_note": "GPT-2 excluded: L0 is rank-deficient at alpha=1 (condition_number=inf).",
+
+  "models": {
+    "llm": "EleutherAI/pythia-410m",
+    "sd": "sd-legacy/stable-diffusion-v1-5",
+    "clip_model": "ViT-L-14",
+    "clip_pretrained": "openai"
+  },
+
+  "projections": {
+    "types": ["per_layer"],
+    "alpha_values": [1],
+    "training_data_size": 5000
+  },
+
+  "probe_texts": {
+    "concrete":  ["a cat", "a dog", "a house", "a tree"],
+    "abstract":  ["democracy", "justice", "entropy", "grief"]
+  },
+
+  "layers": [0, 1, 2, 3],
+
+  "cfg_values": [7.5],
+  "seeds": [42, 123, 777],
+
+  "output": {
+    "base_dir": "./experiment_results_exp2_pythia",
+    "image_format": "png"
+  },
+
+  "use_auto_corpus": true
+}
