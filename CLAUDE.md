@@ -144,36 +144,82 @@ the post-hoc `metrics` phase.
   the LLM only runs once per probe set.
 - **Manifest** — `manifest.json` is the single source of truth for completed work.
 
-## Observed results (GPT-2, 2 experiments)
+## Observed results (GPT-2, per-layer experiment, 5000-sample corpus)
 
-> **Caveat:** All findings below come from only two experiment runs with GPT-2.
-> Generalisation to other models is untested.
+> **Caveat:** Findings below come from GPT-2 only. Generalisation to other models
+> is untested. No images have been generated from the 5000-sample run yet — visual
+> claims below are inferences from projection metrics, not confirmed visually.
+>
+> **Disregard** any renders from earlier runs using ~43 training samples and
+> single-layer Ridge regression. Those showed dark middle layers as an artifact of
+> severe underfitting at that corpus size, not a property of the model.
 
-### Geometry (from `analyze` phase)
+### Geometry (from per-layer SVD analysis, manifest.json)
 
-- **All 12 layers are full-rank** relative to the 768-dim CLIP target.  No dead
-  zones; every layer in principle carries projectable signal.
-- **Effective rank (erank) peaks at mid layers (~6–8)** and is lowest at layer 0
-  and layer 11.  Early layers are spiky (signal concentrated in ~50 directions);
-  late layers broaden but shrink in overall variance.
-- **Singular value spectra** are smooth and decay gradually — no cliff edges.
-  This means the projection is well-conditioned and alpha choice affects magnitude
-  uniformly rather than selectively.
+- **Layers 1–11 are effectively full-rank.** n_visible ≈ 765/768 for all
+  layers ≥ 1. The projection covers nearly the entire CLIP space — no dead zones.
+- **Layer 0 is numerically singular at low alpha** (condition_number = ∞ at
+  alpha = 1, 10, and auto). At high alpha (100, 1000) it becomes well-conditioned.
+  Treat L0 projections with caution; they are rank-deficient under low regularisation.
+- **Erank increases monotonically from L0 to L11** — it does not peak at mid-layers.
+  At alpha=1000: L0=349, L6=432, L11=448. At alpha=1: L0=200, L6=396, L11=422.
+  Early layers are genuinely more concentrated (lower erank); late layers spread
+  variance more evenly across directions.
+- **Singular value spectra are smooth and decay gradually** — no cliff edges.
+  Alpha scales magnitude uniformly across the spectrum rather than selectively
+  zeroing directions.
 
-### Alpha behaviour (observed)
+### Geometric implications
 
-- `alpha=1` and `alpha=10` produce the most layer-discriminative outputs.
-- `alpha=1000` and `auto` collapse per-layer differences — layer sweeps look
-  visually homogeneous.
-- `auto` (RidgeCV) selected high alpha values, favouring stability over
-  expressiveness in this corpus size.
+- **Probing is unconstrained for layers 1–11.** The projection spans ~765 of 768
+  CLIP dimensions. Any linear combination of LLM activations maps to a reachable
+  point; there is no null region that SD cannot decode.
+- **Discrimination comes for free from the projection geometry.** Because the
+  spectrum is full-rank and smooth, two probes that differ anywhere in activation
+  space produce distinguishable CLIP vectors. The projection does not introduce a
+  bottleneck that erases resolution.
+- **The limiting factor is the LLM's geometry, not the projection's.** If two
+  concepts activate the same directions in the LLM, their images will look similar
+  regardless of alpha or layer. The Ridge map faithfully transmits whatever structure
+  is present in the activations.
+- **Layer choice determines which kind of structure is transmitted.** Lower erank
+  at L0 means early-layer variance is concentrated in fewer directions — likely
+  token-identity and position. Higher erank at L11 means late-layer variance is
+  spread more evenly, encoding more compositional and semantic content. Semantic
+  probing will be most interpretable at mid-to-late layers.
+
+### Alpha behaviour (observed, 5000-sample corpus)
+
+- **`auto` (RidgeCV) selected alpha=1000 for every layer** — hitting the top of
+  the grid `[0.01, 0.1, 1, 10, 100, 1000]`. This is a ceiling effect; the true
+  CV optimum may be even higher. RidgeCV optimises R², which prefers high
+  regularisation.
+- **R² and nn_recall@5 pull in opposite directions.** High alpha maximises R² but
+  collapses neighbourhood structure. Low alpha gives negative R² on early layers
+  (overfitting) but preserves topology better at mid-to-late layers:
+
+  | alpha | L11 R²  | L11 nn_recall@5 |
+  |-------|---------|-----------------|
+  | 1     | 0.170   | **0.686**       |
+  | 10    | 0.188   | 0.684           |
+  | 100   | 0.266   | 0.667           |
+  | 1000  | 0.339   | 0.517           |
+
+- **Alpha acts as a compression ratio** on the dynamic range of projected vectors.
+  High alpha brings all probe projections toward the mean, reducing the amplitude
+  difference between "cat" and "democracy" at any given layer. Low alpha preserves
+  relative distances but amplifies noise, especially where the projection is
+  ill-conditioned (L0 at low alpha).
+- **RidgeCV is not the right optimiser** if the goal is visually discriminative
+  images. nn_recall@5 better predicts whether semantically distinct probes produce
+  distinct images. Consider alpha=1 or alpha=10 for generation; use alpha=1000
+  only if stability across layers matters more than discriminability.
 
 ### Known limitations
 
-- Only 2 experiment runs completed.  Effect sizes are not yet confirmed as stable.
-- Training corpus was small (< 5000 samples in both runs).  Larger corpora may
-  shift the alpha → quality relationship.
-- GPT-2 only.  Mid-layer erank peak and early-layer spikiness may not generalise
-  to deeper or instruction-tuned models.
+- GPT-2 only. Monotonic erank growth and L0 singularity may not generalise to
+  other architectures.
+- No images generated yet from the 5000-sample run. Visual claims are projections
+  from metric data only.
 - `generate` phase with non-GPT-2 models was blocked by a `model_id` kwarg bug
   (now fixed in `experiment.py:_load_sd`).
