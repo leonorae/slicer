@@ -255,6 +255,88 @@ A second run with `EleutherAI/pythia-410m` produced meaningfully different geome
 
 - No images generated yet from either 5000-sample run. Visual claims are
   projections from metric data only.
+
+---
+
+## Confounder analysis
+
+### Prompt-corpus membership as a confound
+
+Alpha compression at high regularisation shrinks every projected vector toward the corpus
+mean in CLIP space (Ridge drives W → 0 as α → ∞, so the output converges to the bias
+term b, which encodes the training corpus centroid).  Probes whose LLM activations are
+far from the corpus centroid are moved more by this shrinkage and therefore produce higher
+LPIPS(alpha=1, alpha=1000).
+
+The key risk: **corpus distance and semantic unusualness co-vary** by construction in Exp 3.
+Common-concrete probes ("a cat", "a dog") are heavily represented in Flickr30k and CC3M.
+Unusual probes ("the color of Tuesday") appear nowhere in the corpus.  We cannot separate
+the semantic signal from the corpus-coverage signal without an independent measure of each.
+
+#### Which results are specifically confounded
+
+| Result | Confound severity | Notes |
+|--------|-------------------|-------|
+| **Exp 3** — LPIPS tier ordering (unusual > abstract > concrete) | **High** | Tier labels co-vary with corpus distance by construction |
+| **Exp 1** — LPIPS(concrete, abstract) | **Moderate** | Concrete probes over-represented in image-caption sources; abstract probes in definitional sources |
+| **nn_recall@5 as proxy for probe discriminability** | **Proxy validity** | nn_recall is computed on corpus validation data; it does not predict behaviour on out-of-distribution probes |
+| **Cross-model LPIPS comparison** | **Moderate** | GPT-2 and Pythia-410m have different pretraining corpora; the same probe text may sit at different distances from each model's internal distribution |
+| **SVD metrics (erank, condition_number, n_visible)** | **None** | Computed on the projection matrix W alone; probe texts are not involved |
+| **RidgeCV ceiling effect** | **None** | Property of RidgeCV optimising R² on corpus data |
+| **R² vs nn_recall tension** | **None** | Both are corpus-level training metrics |
+
+#### Corpus-distance metrics (implemented)
+
+Two metrics are now computed per (probe, projection, layer) during the `generate` phase
+and stored in `manifest["probe_corpus_distances"][slug][proj_key][layer]`:
+
+- **`d_act`** — normalised L2 distance of the probe LLM activation from the corpus
+  centroid in activation space.  Uses each layer's z-score parameters (`scaler_mean`,
+  `scaler_scale`) as corpus statistics.  Equivalent to a spherical Mahalanobis distance.
+  A value > 3 indicates a likely out-of-distribution probe.
+
+- **`d_clip`** — cosine distance of the probe's projected CLIP vector from the corpus
+  CLIP centroid.  Available only for projections trained after this metric was added
+  (requires `corpus_clip_centroid.npy` alongside the projection weights).
+
+These metrics let you:
+- Test whether LPIPS differences within Exp 3 survive after controlling for `d_act`
+  (partial correlation: LPIPS ~ tier | d_act)
+- Flag probes with `d_act` > 3 as out-of-distribution and interpret their results with a caveat
+- Check whether the tier ordering in Exp 3 simply recapitulates corpus distance
+
+**Sanity check:** For "a cat", `d_act` should be lower than for "the color of Tuesday"
+across all layers and both models.  If it is not, the corpus centroid distance is not
+capturing expected structure and warrants investigation.
+
+#### What the confound does NOT invalidate
+
+Even if Exp 3 LPIPS differences are entirely explained by corpus distance, that finding
+is itself scientifically meaningful: it shows that alpha compression acts as a
+**corpus-coverage filter** — probes in densely covered regions are stable under alpha
+changes, while probes in sparse regions are compressed toward the mean.  The semantic
+framing ("common" vs "unusual") would need to be re-labelled as "corpus-central" vs
+"corpus-peripheral", but the visual discriminability pattern would still hold.
+
+#### Architecture differences as confounders (not controlled)
+
+Four cross-model architecture effects are not independently controlled:
+
+1. **L0 singularity is GPT-2-specific** — Pythia-410m has finite, stable condition
+   numbers at L0 for every alpha.  Architectural cause unknown; could be embedding
+   initialisation, weight tying, or pretraining corpus differences.
+
+2. **Non-monotone erank at alpha=1000 in Pythia** (L0 peak, L1 dip) — only appears
+   at high regularisation.  May reflect alpha differentially compressing the embedding
+   layer vs. transformer layers due to different activation magnitudes, rather than a
+   semantic bottleneck.
+
+3. **RidgeCV ceiling effect is cross-model** — auto → alpha=1000 for every layer in
+   both models.  Confirms the effect is a property of RidgeCV + R² scoring, not of a
+   specific model.
+
+4. **R² vs nn_recall tension is cross-model** — confirms the conflict is structural,
+   not a GPT-2 artifact.
 - `generate` phase with non-GPT-2 models was blocked by a `model_id` kwarg bug
   (now fixed in `experiment.py:_load_sd`).
 

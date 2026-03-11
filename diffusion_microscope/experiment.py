@@ -150,6 +150,7 @@ class ExperimentRunner:
             "projections": {},
             "images": {},
             "grids": {},
+            "probe_corpus_distances": {},
         }
 
     def _save_manifest(self) -> None:
@@ -395,6 +396,13 @@ class ExperimentRunner:
             else:
                 loaded_projs[key] = LinearProjection.load(str(proj_path))
 
+        # Compute corpus-distance metrics for each (probe, projection, layer).
+        # d_act: normalised L2 distance from corpus LLM-activation centroid (z-scored).
+        # d_clip: cosine distance from corpus CLIP centroid in CLIP space.
+        # These are stored in manifest["probe_corpus_distances"] so downstream
+        # analysis can partial-out corpus distance when interpreting LPIPS differences.
+        self._compute_probe_corpus_distances(probe_texts, probe_acts, layers, loaded_projs)
+
         n_total = (
             len(self.manifest["projections"])
             * len(probe_texts)
@@ -453,6 +461,74 @@ class ExperimentRunner:
             f"\nGenerate phase complete. "
             f"{n_done} new images, {n_skipped} skipped (already done)."
         )
+
+    def _compute_probe_corpus_distances(
+        self,
+        probe_texts: List[str],
+        probe_acts: Dict[str, Dict[int, np.ndarray]],
+        layers: List[int],
+        loaded_projs: Dict[str, Any],
+    ) -> None:
+        """
+        Compute and store corpus-distance metrics per (probe, projection, layer).
+
+        Two metrics:
+          d_act  – normalised L2 distance of the probe LLM activation from the corpus
+                   centroid in activation space.  Uses each layer projection's z-score
+                   parameters (scaler_mean / scaler_scale) as corpus statistics.
+                   Equivalent to a spherical Mahalanobis distance.
+
+          d_clip – cosine distance of the probe's projected CLIP vector from the corpus
+                   CLIP centroid.  Requires corpus_clip_centroid.npy to have been saved
+                   alongside the projection (available for projections trained after this
+                   change).  None when centroid file is absent.
+
+        Results are written to manifest["probe_corpus_distances"][slug][proj_key][layer].
+        Already-computed entries are skipped so the phase remains idempotent.
+        """
+        from sklearn.metrics.pairwise import cosine_distances
+        from .projection import LayerProjectionSet
+
+        distances = self.manifest.setdefault("probe_corpus_distances", {})
+
+        for key, proj in loaded_projs.items():
+            mode = self.manifest["projections"][key]["mode"]
+            if mode != "per_layer":
+                continue
+            assert isinstance(proj, LayerProjectionSet)
+
+            for text in probe_texts:
+                slug = _slug(text)
+                distances.setdefault(slug, {}).setdefault(key, {})
+
+                for layer_idx in layers:
+                    layer_key = str(layer_idx)
+                    if layer_key in distances[slug][key]:
+                        continue  # idempotent
+                    if layer_idx not in proj:
+                        continue
+
+                    layer_proj = proj.projections[layer_idx]
+                    activation = probe_acts[text][layer_idx]
+
+                    d_act = layer_proj.corpus_distance(activation)
+
+                    d_clip: Optional[float] = None
+                    if layer_proj.corpus_clip_centroid is not None:
+                        clip_vec = layer_proj.transform(activation)
+                        d_clip = float(
+                            cosine_distances(
+                                clip_vec[np.newaxis],
+                                layer_proj.corpus_clip_centroid[np.newaxis],
+                            )[0, 0]
+                        )
+
+                    distances[slug][key][layer_key] = {
+                        "d_act": d_act,
+                        "d_clip": d_clip,
+                    }
+
+        self._save_manifest()
 
     # ------------------------------------------------------------------
     # Phase: grids
