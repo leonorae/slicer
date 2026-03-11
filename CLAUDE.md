@@ -57,13 +57,17 @@ python run_experiment.py --config experiment_config.example.json --phase dashboa
 
 ## Projection modes
 
-| Mode | Class | Description |
-|------|-------|-------------|
-| `per_layer` | `LayerProjectionSet` | One `LinearProjection` per layer (default) |
-| `single_layer` | `LinearProjection` | One map from a chosen layer |
-| `mixed_layer` | `LinearProjection` | One map trained on all layers pooled |
+| Mode | Class | Description | Status |
+|------|-------|-------------|--------|
+| `per_layer` | `LayerProjectionSet` | One `LinearProjection` per layer (default) | **Active — all experiments use this** |
+| `single_layer` | `LinearProjection` | One map from a chosen layer | Redundant: `per_layer` already trains every layer; looking at the last-layer row gives identical information |
+| `mixed_layer` | `LinearProjection` | One map trained on all layers pooled | Excluded from planned experiments: pooling all layers creates a map with no specific computational referent, making SVD/erank analysis geometrically ambiguous |
 
-`alpha="auto"` → `_auto_alpha()` → `RidgeCV` with grid `[0.01, 0.1, 1, 10, 100, 1000]`.
+`single_layer` and `mixed_layer` remain supported in code but are not used in the current experiment suite.
+
+`alpha="auto"` → `_auto_alpha()` → `RidgeCV` with grid `[0.01, 0.1, 1, 10, 100, 1000, 10000]`.
+
+**Alpha ceiling note:** RidgeCV previously always selected alpha=1000, hitting the top of the old grid `[…, 1000]`.  The grid was extended to 10000 so that `auto` can find its true optimum.  At alpha=1000 GPT-2 L11 R²=0.339 — W is still non-trivial, not yet at collapse.  Experiments 1 and 3 now include alpha=10000 explicitly to show the full trajectory toward projection collapse (W→0, all probes converge to corpus CLIP centroid).
 
 ## Supported LLMs
 
@@ -108,14 +112,15 @@ register in `_LOADERS` and `ALL_SOURCES`.
 ```
 experiment_results/
 ├── manifest.json                        # Checkpointing key
+│     ├── probe_corpus_distances         # d_act, d_clip per (probe, proj, layer)
+│     ├── probe_text_stats               # n_tokens, perplexity per probe slug
+│     └── seed_variance                  # mean_pixel_var per (proj, probe, layer, cfg)
 ├── dashboard.html
 ├── configs/config_{ts}.json
 ├── projections/{proj_key}/
 ├── grids/by_projection/{proj_key}/{text_slug}/
 │   ├── per_layer/L{N}_CFG{v}_seed{s}.png
-│   ├── grid_seed{s}.png
-│   └── anim_CFG{v}_seed{s}.gif
-├── grids/by_text/{text_slug}/           # Symlinks
+│   └── grid_seed{s}.png
 └── .probe_cache/{slug}/layer_{N}.npy
 ```
 
@@ -124,7 +129,7 @@ experiment_results/
 | Phase | What it does |
 |-------|-------------|
 | `train` | Fit all (projection_type × alpha) combinations |
-| `generate` | Render all (proj × probe × layer × CFG × seed) images |
+| `generate` | Render all (proj × probe × layer × CFG × seed) images; also computes corpus-distance metrics (`d_act`, `d_clip`), probe text stats (`n_tokens`, `perplexity`), and per-group seed variance |
 | `grids` | Compose layer × CFG grid PNGs |
 | `metrics` | Post-hoc LPIPS + image variance |
 | `animations` | Layer-sweep GIFs per (proj, text, CFG, seed) |
@@ -279,6 +284,10 @@ the semantic signal from the corpus-coverage signal without an independent measu
 |--------|-------------------|-------|
 | **Exp 3** — LPIPS tier ordering (unusual > abstract > concrete) | **High** | Tier labels co-vary with corpus distance by construction |
 | **Exp 1** — LPIPS(concrete, abstract) | **Moderate** | Concrete probes over-represented in image-caption sources; abstract probes in definitional sources |
+| **Prompt length** | **Moderate (Exp 3)** | Unusual tier probes are systematically longer ("the feeling of almost remembering" = 7 tokens vs "a cat" = 3). Last-token activation depends on context length. Controlled by `n_tokens` in `probe_text_stats`. |
+| **LLM pretraining corpus distance** | **Moderate (cross-model)** | GPT-2 and Pythia assign different perplexities to the same probe reflecting WebText vs Pile coverage differences. Controlled by `perplexity` in `probe_text_stats`. |
+| **Diffusion prior variance** | **Moderate (all LPIPS)** | Some LPIPS signal between alpha=1 and alpha=1000 images could reflect different amounts of diffusion-prior noise rather than genuine CLIP-vector differences. Controlled by `seed_variance` in manifest: compare variance at alpha=1 vs alpha=1000 for the same probe. |
+| **CFG scale** | **Fixed parameter** | CFG=7.5 is held constant. CFG acts as a gain on the conditioning signal — high CFG amplifies CLIP vector differences, low CFG adds prior noise. Not a confound for within-experiment comparisons (same CFG for all alpha values), but limits generalisability of absolute LPIPS values to other CFG settings. |
 | **nn_recall@5 as proxy for probe discriminability** | **Proxy validity** | nn_recall is computed on corpus validation data; it does not predict behaviour on out-of-distribution probes |
 | **Cross-model LPIPS comparison** | **Moderate** | GPT-2 and Pythia-410m have different pretraining corpora; the same probe text may sit at different distances from each model's internal distribution |
 | **SVD metrics (erank, condition_number, n_visible)** | **None** | Computed on the projection matrix W alone; probe texts are not involved |
@@ -287,8 +296,9 @@ the semantic signal from the corpus-coverage signal without an independent measu
 
 #### Corpus-distance metrics (implemented)
 
-Two metrics are now computed per (probe, projection, layer) during the `generate` phase
-and stored in `manifest["probe_corpus_distances"][slug][proj_key][layer]`:
+All four metric groups below are computed automatically during the `generate` phase.
+
+**`manifest["probe_corpus_distances"][slug][proj_key][layer]`** — per (probe, proj, layer):
 
 - **`d_act`** — normalised L2 distance of the probe LLM activation from the corpus
   centroid in activation space.  Uses each layer's z-score parameters (`scaler_mean`,
@@ -299,11 +309,33 @@ and stored in `manifest["probe_corpus_distances"][slug][proj_key][layer]`:
   CLIP centroid.  Available only for projections trained after this metric was added
   (requires `corpus_clip_centroid.npy` alongside the projection weights).
 
+**`manifest["probe_text_stats"][slug]`** — per probe text:
+
+- **`n_tokens`** — number of tokens the probe text produces under the LLM's tokenizer.
+  Controls for the prompt-length confound in Exp 3 (unusual probes are systematically longer).
+
+- **`perplexity`** — LLM perplexity of the probe text (exp of mean negative log-likelihood).
+  Proxy for distance from the LLM's *pretraining* corpus.  Addresses the cross-model confound:
+  GPT-2 and Pythia assign different perplexities to the same probe reflecting WebText vs Pile
+  coverage differences.
+
+**`manifest["seed_variance"]["{proj_key}/{slug}/L{N}/CFG{v}"]`** — per (proj, probe, layer, CFG):
+
+- **`mean_pixel_var`** — mean per-pixel variance across all seed images.  Low variance = the
+  CLIP conditioning vector determines image content; high variance = diffusion prior is filling
+  in detail.  Compare `mean_pixel_var` at alpha=1 vs alpha=1000 for the same probe to determine
+  whether LPIPS differences reflect genuine conditioning differences or prior-noise differences.
+  Computed when ≥ 4 seed images exist for the group.
+
+- **`n_seeds`** — number of seed images that contributed to the variance estimate.
+
 These metrics let you:
 - Test whether LPIPS differences within Exp 3 survive after controlling for `d_act`
   (partial correlation: LPIPS ~ tier | d_act)
 - Flag probes with `d_act` > 3 as out-of-distribution and interpret their results with a caveat
 - Check whether the tier ordering in Exp 3 simply recapitulates corpus distance
+- Distinguish "LPIPS is high because CLIP vectors differ" from "LPIPS is high because SD prior noise differs" using `mean_pixel_var`
+- Control for prompt length (`n_tokens`) and pretraining-corpus membership (`perplexity`) in cross-tier or cross-model comparisons
 
 **Sanity check:** For "a cat", `d_act` should be lower than for "the color of Tuesday"
 across all layers and both models.  If it is not, the corpus centroid distance is not
@@ -371,8 +403,7 @@ at least one additional model.
 ## Planned experiments
 
 Three experiments in priority order, each with a config file ready to run.
-All use the existing 5000-sample trained projections — only the `generate` and
-`grids` phases need running (train phase is already done).
+All need full re-runs (train + generate + grids) due to expanded design.
 
 ### Exp 1 — Alpha compression visibility
 
@@ -383,10 +414,10 @@ information the compressor destroys.
 
 **Design:**
 - Models: GPT-2 (last layer L11) and Pythia-410m (last layer L23) — run separately
-- Alpha: 1 and 1000 (extremes only)
+- Alpha: 1, 1000, and 10000 (to show full collapse trajectory)
 - Probe set: concrete + abstract (see configs)
-- CFG: 7.5 only (one value to keep output manageable)
-- Seeds: 42, 123, 777 (3 seeds for stability)
+- CFG: 7.5 (fixed; acts as gain on conditioning — see confounder table)
+- Seeds: 16 (for seed-variance estimation alongside LPIPS; Phase 4 metric)
 - Layers: last layer only (`layers: [11]` for GPT-2, `[23]` for Pythia)
 
 **Analysis:** For each probe, compute LPIPS(alpha=1 image, alpha=1000 image).
@@ -444,10 +475,10 @@ near the corpus mean — their projection is insensitive to alpha compression.
   - *Common-abstract* (moderate sensitivity): "democracy", "justice", "beauty"
   - *Unusual* (should be alpha-sensitive): "the feeling of almost remembering",
     "the color of Tuesday", "entropy at midnight"
-- Alpha: 1 and 1000
+- Alpha: 1, 1000, and 10000
 - Models: both (cross-model check is the key result)
 - Layers: last layer of each model
-- Seeds: 42, 123, 777
+- Seeds: 16 (same set as Exp 1; enables seed-variance comparison across tiers)
 
 **Analysis:** LPIPS(alpha=1, alpha=1000) per probe. Test whether LPIPS ranks
 probes by tier: unusual > common-abstract > common-concrete.

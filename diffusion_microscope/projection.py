@@ -24,7 +24,7 @@ import numpy as np
 
 
 # Alpha grid used by RidgeCV when alpha="auto" for any projection type.
-_ALPHA_GRID: List[float] = [0.01, 0.1, 1.0, 10.0, 100.0, 1000.0]
+_ALPHA_GRID: List[float] = [0.01, 0.1, 1.0, 10.0, 100.0, 1000.0, 10000.0]
 
 
 def _auto_alpha(X_train: np.ndarray, y_train: np.ndarray) -> float:
