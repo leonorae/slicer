@@ -350,6 +350,66 @@ These metrics let you:
 across all layers and both models.  If it is not, the corpus centroid distance is not
 capturing expected structure and warrants investigation.
 
+#### Why LPIPS is the wrong primary metric, and the CFG sensitivity floor
+
+LPIPS adds three uncontrolled steps between the quantity of interest (CLIP vector
+differences) and the measurement: SD rendering, diffusion prior noise, and AlexNet's
+perceptual model.  The actual question — does alpha compression destroy information in
+the CLIP projection? — is answerable directly in CLIP space.
+
+**CFG sensitivity floor mechanics:**
+CFG applies as `ε_out = ε_uncond + s·(ε_cond − ε_uncond)`.  The effective deviation
+from unconditional generation scales linearly with CFG.  This means LPIPS is roughly a
+function of `(CLIP cosine distance × CFG)`, not CLIP distance alone.  Below some
+threshold CLIP distance δ, even CFG=7.5 cannot amplify the difference above the
+seed-variance noise floor — LPIPS measures noise, not signal.  δ is unknown without
+sweeping both CFG and CLIP distance, which is a separate experiment.
+
+**Consequence for Exp 1 and Exp 3:**  it is not known in advance whether the probe
+pairs of interest (e.g. alpha=1 vs alpha=1000 for "a cat") produce CLIP distances above
+or below δ.  If all probes are below δ, LPIPS tier ordering is entirely noise.  The
+scatter of LPIPS vs. CLIP cosine distance (implemented in the notebook) characterises
+δ empirically: if the scatter is flat, the images are not a reliable diagnostic at
+CFG=7.5.
+
+**Metric hierarchy:**
+1. `cosine_distance(proj_α1(act), proj_α1000(act))` — primary.  CFG-independent,
+   SD-independent.  Stored in `manifest["probe_clip_vectors"]`.
+2. LPIPS — secondary confirmation.  Valid only if it correlates with (1).  Seed variance
+   is its noise floor.
+3. Images — illustrative only.  Cannot be used as primary evidence.
+
+#### Multicollinearity between d_act and compression displacement
+
+The partial correlation `cosine_distance(α1, α1000) ~ tier | d_act` assumes that
+`d_act` and cosine distance have residual variance not accounted for by corpus distance
+alone.  This may not hold.
+
+**Geometric argument:** the compression displacement is
+`(W_α1 − W_α1000) · (act − μ)`, which scales proportionally with `‖act − μ‖`
+(i.e. d_act) whenever `(W_α1 − W_α1000)` has approximately uniform singular values.
+Given n_visible ≈ 767/768 and a smooth spectrum for both models, this is likely.
+If `r(d_act, cosine_dist) > 0.9`, the partial correlation has very little residual
+variance to work with — low statistical power even if the tier effect is real.
+
+**The ratio alternative:** `cosine_distance(α1, α1000) / d_act` controls for corpus
+distance by construction without requiring residual variance.  Under the null (corpus
+distance is the complete explanation), this ratio is constant across tiers.  A tier
+ordering in the ratio is genuine — it cannot be explained by d_act alone.
+
+**When to prefer the ratio over partial correlation:**
+- Check the scatter of d_act vs. cosine_dist (implemented in the notebook).
+- If `|r| > 0.9`: use the ratio; partial correlation is uninformative.
+- If the scatter passes through the origin: proportional normalisation (ratio) is
+  correct.  If there is a meaningful non-zero intercept: use regression residuals instead.
+- The coefficient of variation of the ratio across tier means quantifies the effect
+  size: CoV < 0.15 ≈ flat (corpus distance explains everything); CoV > 0.15 suggests
+  a tier effect beyond corpus coverage.
+
+**Null result framing:** a flat ratio is not a failure — it means alpha compression is a
+pure corpus-coverage filter, operating proportionally on every probe regardless of
+semantic content.  This is itself informative about the geometry of the Ridge projection.
+
 #### What the confound does NOT invalidate
 
 Even if Exp 3 LPIPS differences are entirely explained by corpus distance, that finding
