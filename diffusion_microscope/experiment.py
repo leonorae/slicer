@@ -150,6 +150,7 @@ class ExperimentRunner:
             "projections": {},
             "images": {},
             "grids": {},
+            "probe_corpus_distances": {},
         }
 
     def _save_manifest(self) -> None:
@@ -395,6 +396,20 @@ class ExperimentRunner:
             else:
                 loaded_projs[key] = LinearProjection.load(str(proj_path))
 
+        # Compute corpus-distance metrics for each (probe, projection, layer).
+        # d_act: normalised L2 distance from corpus LLM-activation centroid (z-scored).
+        # d_clip: cosine distance from corpus CLIP centroid in CLIP space.
+        # These are stored in manifest["probe_corpus_distances"] so downstream
+        # analysis can partial-out corpus distance when interpreting LPIPS differences.
+        self._compute_probe_corpus_distances(probe_texts, probe_acts, layers, loaded_projs)
+
+        # Record token count and LLM perplexity per probe text.  Both are
+        # cheap (single forward pass per text) and address two confounders:
+        #   n_tokens   – prompt length co-varies with unusualness tier in Exp 3
+        #   perplexity – proxy for distance from LLM pretraining corpus; addresses
+        #                the cross-model confound for GPT-2 vs Pythia comparisons
+        self._compute_probe_text_stats(probe_texts, llm, tok)
+
         n_total = (
             len(self.manifest["projections"])
             * len(probe_texts)
@@ -419,13 +434,27 @@ class ExperimentRunner:
                         clip_vec = proj.transform(layer_idx, activation)
                     else:
                         clip_vec = proj.transform(activation)
+
+                    # Store the projected CLIP vector so downstream analysis
+                    # can compute cosine distances between projections at
+                    # different alpha values directly in CLIP space — the
+                    # primary discriminability metric — without reloading the
+                    # LLM or SD.
+                    # Structure: probe_clip_vectors[proj_key][slug][layer_idx]
+                    self.manifest \
+                        .setdefault("probe_clip_vectors", {}) \
+                        .setdefault(key, {}) \
+                        .setdefault(slug, {})[str(layer_idx)] = clip_vec.tolist()
+
                     for cfg in cfg_scales:
+                        seed_rel_paths: List[str] = []
                         for seed in seeds:
                             rel = (
                                 img_dir.relative_to(self.base_dir)
                                 / f"L{layer_idx:04d}_CFG{cfg:g}_seed{seed}.png"
                             )
                             rel_str = str(rel)
+                            seed_rel_paths.append(rel_str)
                             if rel_str in self.manifest["images"]:
                                 n_skipped += 1
                                 continue
@@ -448,11 +477,187 @@ class ExperimentRunner:
                                 self._save_manifest()
                                 print(f"  Generated {n_done}/{n_total - n_skipped} images…")
 
+                        # Compute per-pixel variance across seeds for this
+                        # (proj, probe, layer, CFG) group.  Requires ≥ 4 seed
+                        # images to exist; skipped silently otherwise.
+                        # Stored in manifest["seed_variance"] for Phase 4
+                        # diffusion-prior quantification.
+                        self._compute_group_seed_variance(
+                            key, slug, layer_idx, cfg, seed_rel_paths
+                        )
+
         self._save_manifest()
         print(
             f"\nGenerate phase complete. "
             f"{n_done} new images, {n_skipped} skipped (already done)."
         )
+
+    def _compute_probe_corpus_distances(
+        self,
+        probe_texts: List[str],
+        probe_acts: Dict[str, Dict[int, np.ndarray]],
+        layers: List[int],
+        loaded_projs: Dict[str, Any],
+    ) -> None:
+        """
+        Compute and store corpus-distance metrics per (probe, projection, layer).
+
+        Two metrics:
+          d_act  – normalised L2 distance of the probe LLM activation from the corpus
+                   centroid in activation space.  Uses each layer projection's z-score
+                   parameters (scaler_mean / scaler_scale) as corpus statistics.
+                   Equivalent to a spherical Mahalanobis distance.
+
+          d_clip – cosine distance of the probe's projected CLIP vector from the corpus
+                   CLIP centroid.  Requires corpus_clip_centroid.npy to have been saved
+                   alongside the projection (available for projections trained after this
+                   change).  None when centroid file is absent.
+
+        Results are written to manifest["probe_corpus_distances"][slug][proj_key][layer].
+        Already-computed entries are skipped so the phase remains idempotent.
+        """
+        from sklearn.metrics.pairwise import cosine_distances
+        from .projection import LayerProjectionSet
+
+        distances = self.manifest.setdefault("probe_corpus_distances", {})
+
+        for key, proj in loaded_projs.items():
+            mode = self.manifest["projections"][key]["mode"]
+            if mode != "per_layer":
+                continue
+            assert isinstance(proj, LayerProjectionSet)
+
+            for text in probe_texts:
+                slug = _slug(text)
+                distances.setdefault(slug, {}).setdefault(key, {})
+
+                for layer_idx in layers:
+                    layer_key = str(layer_idx)
+                    if layer_key in distances[slug][key]:
+                        continue  # idempotent
+                    if layer_idx not in proj:
+                        continue
+
+                    layer_proj = proj.projections[layer_idx]
+                    activation = probe_acts[text][layer_idx]
+
+                    d_act = layer_proj.corpus_distance(activation)
+
+                    d_clip: Optional[float] = None
+                    if layer_proj.corpus_clip_centroid is not None:
+                        clip_vec = layer_proj.transform(activation)
+                        d_clip = float(
+                            cosine_distances(
+                                clip_vec[np.newaxis],
+                                layer_proj.corpus_clip_centroid[np.newaxis],
+                            )[0, 0]
+                        )
+
+                    distances[slug][key][layer_key] = {
+                        "d_act": d_act,
+                        "d_clip": d_clip,
+                    }
+
+        self._save_manifest()
+
+    def _compute_probe_text_stats(
+        self,
+        probe_texts: List[str],
+        llm: Any,
+        tok: Any,
+    ) -> None:
+        """
+        Record per-probe text statistics addressing two confounders:
+
+          n_tokens   – token count of the probe text.  Prompt length co-varies
+                       with the "unusualness" tier in Exp 3 (unusual probes are
+                       systematically longer), which could confound LPIPS results.
+
+          perplexity – LLM perplexity of the probe text.  Serves as a proxy for
+                       distance from the LLM's pretraining corpus, addressing the
+                       cross-model confound: GPT-2 (WebText) and Pythia (The Pile)
+                       assign different perplexities to the same probe, so a gap
+                       in LPIPS between models could reflect pretraining-corpus
+                       coverage rather than architecture.
+
+        Results are stored in manifest["probe_text_stats"][slug].
+        Already-computed entries are skipped (idempotent).
+        """
+        import torch
+
+        stats = self.manifest.setdefault("probe_text_stats", {})
+
+        for text in probe_texts:
+            slug = _slug(text)
+            if slug in stats:
+                continue
+
+            inputs = tok(text, return_tensors="pt").to(self.device)
+            n_tokens = int(inputs["input_ids"].shape[1])
+
+            try:
+                with torch.no_grad():
+                    outputs = llm(**inputs, labels=inputs["input_ids"])
+                perplexity = float(torch.exp(outputs.loss).item())
+            except Exception:
+                perplexity = None
+
+            stats[slug] = {
+                "text": text,
+                "n_tokens": n_tokens,
+                "perplexity": perplexity,
+            }
+
+        self._save_manifest()
+
+    def _compute_group_seed_variance(
+        self,
+        proj_key: str,
+        text_slug: str,
+        layer_idx: int,
+        cfg: float,
+        seed_rel_paths: List[str],
+    ) -> None:
+        """
+        Compute mean per-pixel variance across all seed images for one
+        (projection, probe, layer, CFG) group.
+
+        This is the Phase 4 diffusion-prior quantification metric: low variance
+        means the CLIP conditioning vector determines the image content; high
+        variance means the diffusion prior is filling in the details.  Comparing
+        variance between alpha=1 and alpha=1000 images (same probe, same layer)
+        tests whether the LPIPS signal reflects real conditioning differences or
+        just diffusion-prior noise.
+
+        Requires ≥ 4 seed images to be present on disk; skipped silently
+        otherwise (e.g., if the experiment was interrupted mid-group).
+        Results are stored in manifest["seed_variance"][var_key] and are
+        idempotent across re-runs.
+        """
+        from PIL import Image
+
+        var_key = f"{proj_key}/{text_slug}/L{layer_idx:04d}/CFG{cfg:g}"
+        if var_key in self.manifest.get("seed_variance", {}):
+            return
+
+        imgs = []
+        for rel_str in seed_rel_paths:
+            p = self.base_dir / rel_str
+            if p.exists():
+                imgs.append(
+                    np.array(Image.open(p).convert("RGB"), dtype=np.float32)
+                )
+
+        if len(imgs) < 4:
+            return
+
+        stack = np.stack(imgs, axis=0)  # (N, H, W, 3)
+        mean_var = float(stack.var(axis=0).mean())
+
+        self.manifest.setdefault("seed_variance", {})[var_key] = {
+            "mean_pixel_var": mean_var,
+            "n_seeds": len(imgs),
+        }
 
     # ------------------------------------------------------------------
     # Phase: grids

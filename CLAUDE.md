@@ -57,13 +57,17 @@ python run_experiment.py --config experiment_config.example.json --phase dashboa
 
 ## Projection modes
 
-| Mode | Class | Description |
-|------|-------|-------------|
-| `per_layer` | `LayerProjectionSet` | One `LinearProjection` per layer (default) |
-| `single_layer` | `LinearProjection` | One map from a chosen layer |
-| `mixed_layer` | `LinearProjection` | One map trained on all layers pooled |
+| Mode | Class | Description | Status |
+|------|-------|-------------|--------|
+| `per_layer` | `LayerProjectionSet` | One `LinearProjection` per layer (default) | **Active — all experiments use this** |
+| `single_layer` | `LinearProjection` | One map from a chosen layer | Redundant: `per_layer` already trains every layer; looking at the last-layer row gives identical information |
+| `mixed_layer` | `LinearProjection` | One map trained on all layers pooled | Excluded from planned experiments: pooling all layers creates a map with no specific computational referent, making SVD/erank analysis geometrically ambiguous |
 
-`alpha="auto"` → `_auto_alpha()` → `RidgeCV` with grid `[0.01, 0.1, 1, 10, 100, 1000]`.
+`single_layer` and `mixed_layer` remain supported in code but are not used in the current experiment suite.
+
+`alpha="auto"` → `_auto_alpha()` → `RidgeCV` with grid `[0.01, 0.1, 1, 10, 100, 1000, 10000]`.
+
+**Alpha ceiling note:** RidgeCV previously always selected alpha=1000, hitting the top of the old grid `[…, 1000]`.  The grid was extended to 10000 so that `auto` can find its true optimum.  At alpha=1000 GPT-2 L11 R²=0.339 — W is still non-trivial, not yet at collapse.  Experiments 1 and 3 now include alpha=10000 explicitly to show the full trajectory toward projection collapse (W→0, all probes converge to corpus CLIP centroid).
 
 ## Supported LLMs
 
@@ -108,14 +112,15 @@ register in `_LOADERS` and `ALL_SOURCES`.
 ```
 experiment_results/
 ├── manifest.json                        # Checkpointing key
+│     ├── probe_corpus_distances         # d_act, d_clip per (probe, proj, layer)
+│     ├── probe_text_stats               # n_tokens, perplexity per probe slug
+│     └── seed_variance                  # mean_pixel_var per (proj, probe, layer, cfg)
 ├── dashboard.html
 ├── configs/config_{ts}.json
 ├── projections/{proj_key}/
 ├── grids/by_projection/{proj_key}/{text_slug}/
 │   ├── per_layer/L{N}_CFG{v}_seed{s}.png
-│   ├── grid_seed{s}.png
-│   └── anim_CFG{v}_seed{s}.gif
-├── grids/by_text/{text_slug}/           # Symlinks
+│   └── grid_seed{s}.png
 └── .probe_cache/{slug}/layer_{N}.npy
 ```
 
@@ -124,7 +129,7 @@ experiment_results/
 | Phase | What it does |
 |-------|-------------|
 | `train` | Fit all (projection_type × alpha) combinations |
-| `generate` | Render all (proj × probe × layer × CFG × seed) images |
+| `generate` | Render all (proj × probe × layer × CFG × seed) images; also computes corpus-distance metrics (`d_act`, `d_clip`), probe text stats (`n_tokens`, `perplexity`), and per-group seed variance |
 | `grids` | Compose layer × CFG grid PNGs |
 | `metrics` | Post-hoc LPIPS + image variance |
 | `animations` | Layer-sweep GIFs per (proj, text, CFG, seed) |
@@ -255,6 +260,150 @@ A second run with `EleutherAI/pythia-410m` produced meaningfully different geome
 
 - No images generated yet from either 5000-sample run. Visual claims are
   projections from metric data only.
+
+---
+
+## Confounder analysis
+
+### Prompt-corpus membership as a confound
+
+Alpha compression at high regularisation shrinks every projected vector toward the corpus
+mean in CLIP space (Ridge drives W → 0 as α → ∞, so the output converges to the bias
+term b, which encodes the training corpus centroid).  Probes whose LLM activations are
+far from the corpus centroid are moved more by this shrinkage and therefore produce higher
+LPIPS(alpha=1, alpha=1000).
+
+The key risk: **corpus distance and semantic unusualness co-vary** by construction in Exp 3.
+Common-concrete probes ("a cat", "a dog") are heavily represented in Flickr30k and CC3M.
+Unusual probes ("the color of Tuesday") appear nowhere in the corpus.  We cannot separate
+the semantic signal from the corpus-coverage signal without an independent measure of each.
+
+#### Which results are specifically confounded
+
+| Result | Confound severity | Notes |
+|--------|-------------------|-------|
+| **Exp 3** — LPIPS tier ordering (unusual > abstract > concrete) | **High** | Tier labels co-vary with corpus distance by construction |
+| **Exp 1** — LPIPS(concrete, abstract) | **Moderate** | Concrete probes over-represented in image-caption sources; abstract probes in definitional sources |
+| **Prompt length** | **Moderate (Exp 3)** | Unusual tier probes are systematically longer ("the feeling of almost remembering" = 7 tokens vs "a cat" = 3). Last-token activation depends on context length. Controlled by `n_tokens` in `probe_text_stats`. |
+| **LLM pretraining corpus distance** | **Moderate (cross-model)** | GPT-2 and Pythia assign different perplexities to the same probe reflecting WebText vs Pile coverage differences. Controlled by `perplexity` in `probe_text_stats`. |
+| **Diffusion prior variance** | **Moderate (all LPIPS)** | Some LPIPS signal between alpha=1 and alpha=1000 images could reflect different amounts of diffusion-prior noise rather than genuine CLIP-vector differences. Controlled by `seed_variance` in manifest: compare variance at alpha=1 vs alpha=1000 for the same probe. |
+| **CFG scale** | **Fixed parameter** | CFG=7.5 is held constant. CFG acts as a gain on the conditioning signal — high CFG amplifies CLIP vector differences, low CFG adds prior noise. Not a confound for within-experiment comparisons (same CFG for all alpha values), but limits generalisability of absolute LPIPS values to other CFG settings. |
+| **nn_recall@5 as proxy for probe discriminability** | **Proxy validity** | nn_recall is computed on corpus validation data; it does not predict behaviour on out-of-distribution probes |
+| **Cross-model LPIPS comparison** | **Moderate** | GPT-2 and Pythia-410m have different pretraining corpora; the same probe text may sit at different distances from each model's internal distribution |
+| **SVD metrics (erank, condition_number, n_visible)** | **None** | Computed on the projection matrix W alone; probe texts are not involved |
+| **RidgeCV ceiling effect** | **None** | Property of RidgeCV optimising R² on corpus data |
+| **R² vs nn_recall tension** | **None** | Both are corpus-level training metrics |
+
+#### Corpus-distance metrics (implemented)
+
+All four metric groups below are computed automatically during the `generate` phase.
+
+**`manifest["probe_corpus_distances"][slug][proj_key][layer]`** — per (probe, proj, layer):
+
+- **`d_act`** — normalised L2 distance of the probe LLM activation from the corpus
+  centroid in activation space.  Uses each layer's z-score parameters (`scaler_mean`,
+  `scaler_scale`) as corpus statistics.  Equivalent to a spherical Mahalanobis distance.
+  A value > 3 indicates a likely out-of-distribution probe.
+
+- **`d_clip`** — cosine distance of the probe's projected CLIP vector from the corpus
+  CLIP centroid.  Available only for projections trained after this metric was added
+  (requires `corpus_clip_centroid.npy` alongside the projection weights).
+
+**`manifest["probe_text_stats"][slug]`** — per probe text:
+
+- **`n_tokens`** — number of tokens the probe text produces under the LLM's tokenizer.
+  Controls for the prompt-length confound in Exp 3 (unusual probes are systematically longer).
+
+- **`perplexity`** — LLM perplexity of the probe text (exp of mean negative log-likelihood).
+  Proxy for distance from the LLM's *pretraining* corpus.  Addresses the cross-model confound:
+  GPT-2 and Pythia assign different perplexities to the same probe reflecting WebText vs Pile
+  coverage differences.
+
+**`manifest["seed_variance"]["{proj_key}/{slug}/L{N}/CFG{v}"]`** — per (proj, probe, layer, CFG):
+
+- **`mean_pixel_var`** — mean per-pixel variance across all seed images.  Low variance = the
+  CLIP conditioning vector determines image content; high variance = diffusion prior is filling
+  in detail.  Compare `mean_pixel_var` at alpha=1 vs alpha=1000 for the same probe to determine
+  whether LPIPS differences reflect genuine conditioning differences or prior-noise differences.
+  Computed when ≥ 4 seed images exist for the group.
+
+- **`n_seeds`** — number of seed images that contributed to the variance estimate.
+
+These metrics let you:
+- Test whether LPIPS differences within Exp 3 survive after controlling for `d_act`
+  (partial correlation: LPIPS ~ tier | d_act)
+- Flag probes with `d_act` > 3 as out-of-distribution and interpret their results with a caveat
+- Check whether the tier ordering in Exp 3 simply recapitulates corpus distance
+- Distinguish "LPIPS is high because CLIP vectors differ" from "LPIPS is high because SD prior noise differs" using `mean_pixel_var`
+- Control for prompt length (`n_tokens`) and pretraining-corpus membership (`perplexity`) in cross-tier or cross-model comparisons
+
+**`manifest["probe_clip_vectors"][proj_key][slug][layer_idx]`** — per (proj, probe, layer):
+
+- The projected CLIP vector as a Python list of floats.  Stored during the `generate`
+  phase (free, since the vector is already computed for SD conditioning).  Enables
+  cosine distance computation between projections at different alpha values without
+  reloading the LLM or SD.  This is the **primary discriminability metric** for Exp 1
+  and Exp 3: `cosine_distance(proj_α1(act), proj_α1000(act))` is CFG-independent and
+  directly answers whether compression moved the CLIP vector.
+
+**Sanity check:** For "a cat", `d_act` should be lower than for "the color of Tuesday"
+across all layers and both models.  If it is not, the corpus centroid distance is not
+capturing expected structure and warrants investigation.
+
+#### What the confound does NOT invalidate
+
+Even if Exp 3 LPIPS differences are entirely explained by corpus distance, that finding
+is itself scientifically meaningful: it shows that alpha compression acts as a
+**corpus-coverage filter** — probes in densely covered regions are stable under alpha
+changes, while probes in sparse regions are compressed toward the mean.  The semantic
+framing ("common" vs "unusual") would need to be re-labelled as "corpus-central" vs
+"corpus-peripheral", but the visual discriminability pattern would still hold.
+
+#### Architecture differences as confounders (not controlled)
+
+The table below maps every key empirical finding to its model scope.  Any result
+marked "GPT-2 only" or "Pythia only" should not be generalised until replicated on
+at least one additional model.
+
+| Observation | Scope | Likely architectural cause | Generalises? |
+|---|---|---|---|
+| L0 rank-deficiency at low alpha | **GPT-2 only** | Weight tying between embedding and unembedding matrices; GPT-2 ties input and output embeddings, which may constrain the activation manifold at L0 | Unknown |
+| Finite, stable L0 condition numbers | **Pythia only** | Pythia does not tie embeddings; separate initialisation gives L0 activations a full-rank covariance | Unknown |
+| Erank increases monotonically (α=1) | **GPT-2 only** | Smooth accumulation of representational capacity layer by layer | Not confirmed for Pythia |
+| Non-monotone erank at α=1000 (L0 peak, L1 dip) | **Pythia only** | Alpha differentially shrinks the embedding layer (different activation scale) vs. transformer layers; artefact of high regularisation, not semantic bottleneck | Unknown |
+| Erank plateau + slight drop at L22–23 (α=1) | **Pythia only** | Possible late-layer representational compression; only observed at α=1 | Unknown |
+| RidgeCV selects α=1000 for every layer | **Both models** | RidgeCV optimises R², which prefers high regularisation; this is a property of the scoring function, not the LLM | Likely universal |
+| R² vs nn_recall@5 pull in opposite directions | **Both models** | Structural conflict between reconstruction fidelity and topology preservation; not model-specific | Likely universal |
+| n_visible ≈ 767/768 at layers ≥ 1 | **Both models** | CLIP space is well-covered by both models' activations once any transformer processing has occurred | Plausibly general |
+| nn_recall@5 increases with layer depth (α=1) | **Both models** | Later layers encode more compositional/semantic content that aligns better with CLIP's training objective | Plausibly general |
+
+**Architectural candidates for the L0 differences:**
+
+- *Weight tying* (GPT-2) forces the output of the embedding layer to live in the same
+  subspace as the vocabulary embedding matrix.  If that matrix is low-rank relative to
+  the hidden dimension, the L0 activation covariance inherits that rank deficiency.
+  Pythia uses separate matrices, so no such constraint applies.
+
+- *Initialisation scale* differs between architectures.  If GPT-2's L0 activations
+  have a near-degenerate covariance structure (many very small eigenvalues), then at
+  low alpha the Ridge estimator overfits those directions, producing apparent singularity
+  in the condition number.
+
+- *Pretraining corpus distribution* cannot be ruled out.  GPT-2 was trained on WebText;
+  Pythia on The Pile.  Different corpus statistics may produce different activation
+  covariance structures at L0 independent of weight tying.
+
+**What is NOT controlled:**
+
+- All SVD metrics compare models trained on different corpora with different
+  tokenizers.  Observed differences in erank or condition number could reflect corpus
+  statistics rather than architecture.
+- L0 is the embedding layer in both models, but its role differs: GPT-2's tied
+  embeddings mean L0 directly reflects vocabulary statistics; Pythia's untied L0 does
+  not.  Comparing L0 across models is comparing qualitatively different computational
+  stages.
+- Depth is not matched: GPT-2 has 12 layers, Pythia-410m has 24.  "Last layer"
+  comparisons conflate layer depth with depth as a fraction of total network depth.
 - `generate` phase with non-GPT-2 models was blocked by a `model_id` kwarg bug
   (now fixed in `experiment.py:_load_sd`).
 
@@ -263,27 +412,30 @@ A second run with `EleutherAI/pythia-410m` produced meaningfully different geome
 ## Planned experiments
 
 Three experiments in priority order, each with a config file ready to run.
-All use the existing 5000-sample trained projections — only the `generate` and
-`grids` phases need running (train phase is already done).
+All need full re-runs (train + generate + grids) due to expanded design.
 
 ### Exp 1 — Alpha compression visibility
 
-**Goal:** Validate that nn_recall@5 predicts visual discriminability.
-**Hypothesis:** alpha=1 images are more distinct per probe than alpha=1000 images.
-LPIPS between alpha=1 and alpha=1000 for the same prompt quantifies how much
-information the compressor destroys.
+**Goal:** Validate that nn_recall@5 predicts discriminability under alpha compression.
+**Hypothesis:** alpha=1 produces more distinct CLIP projections per probe than alpha=1000.
+The primary evidence is geometric; the images are secondary illustration.
 
 **Design:**
 - Models: GPT-2 (last layer L11) and Pythia-410m (last layer L23) — run separately
-- Alpha: 1 and 1000 (extremes only)
+- Alpha: 1, 1000, and 10000 (to show full collapse trajectory)
 - Probe set: concrete + abstract (see configs)
-- CFG: 7.5 only (one value to keep output manageable)
-- Seeds: 42, 123, 777 (3 seeds for stability)
+- CFG: 7.5 (fixed; acts as gain on conditioning — see confounder table)
+- Seeds: 16 (for seed-variance estimation; Phase 4 metric)
 - Layers: last layer only (`layers: [11]` for GPT-2, `[23]` for Pythia)
 
-**Analysis:** For each probe, compute LPIPS(alpha=1 image, alpha=1000 image).
-If nn_recall@5 is a good proxy for visual discriminability, LPIPS should be
-higher for abstract prompts (lower nn_recall at high alpha) than concrete ones.
+**Analysis (primary):** `cosine_distance(proj_α1(act), proj_α1000(act))` per probe,
+stored in `manifest["probe_clip_vectors"]`. CFG-independent. Tests whether alpha
+compression moves the CLIP vector and whether this differs by probe tier.
+
+**Analysis (secondary):** LPIPS(alpha=1 image, alpha=1000 image) as a downstream
+visibility check. Only meaningful if it correlates with CLIP cosine distance — a flat
+scatter means CFG=7.5 is below the sensitivity floor for these probes. Seed variance
+is the noise floor below which LPIPS cannot distinguish conditioning from prior.
 
 **Configs:** `experiment_config_exp1_gpt2.json`, `experiment_config_exp1_pythia.json`
 **Commands:**
@@ -336,18 +488,24 @@ near the corpus mean — their projection is insensitive to alpha compression.
   - *Common-abstract* (moderate sensitivity): "democracy", "justice", "beauty"
   - *Unusual* (should be alpha-sensitive): "the feeling of almost remembering",
     "the color of Tuesday", "entropy at midnight"
-- Alpha: 1 and 1000
+- Alpha: 1, 1000, and 10000
 - Models: both (cross-model check is the key result)
 - Layers: last layer of each model
-- Seeds: 42, 123, 777
+- Seeds: 16 (same set as Exp 1; enables seed-variance comparison across tiers)
 
-**Analysis:** LPIPS(alpha=1, alpha=1000) per probe. Test whether LPIPS ranks
-probes by tier: unusual > common-abstract > common-concrete.
+**Analysis (primary):** `cosine_distance(proj_α1(act), proj_α1000(act))` per probe,
+grouped by tier. Tests the tier hypothesis in CLIP space directly without SD or CFG.
+Partial correlation against `d_act` (corpus-distance confound) and `n_tokens`
+(prompt-length confound) determines whether the tier ordering is genuine.
+
+**Analysis (secondary):** LPIPS(alpha=1, alpha=1000) per probe, with scatter against
+CLIP cosine distance to verify it tracks the geometric signal. If the scatter is flat,
+LPIPS is below the CFG=7.5 sensitivity floor and the images cannot be used as evidence.
 
 **Confound to watch:** low-variance directions in the *projection* ≠ semantically
-unusual prompts — they could be directions with sparse corpus coverage. The
-experiment tests the surface correlation; a follow-up would compare against
-activation-space distance from the corpus centroid as an independent novelty measure.
+unusual prompts — they could be directions with sparse corpus coverage (`d_act`).
+A tier ordering in cosine distance that survives partial correlation against `d_act`
+is genuine; one that disappears is a corpus-coverage artefact.
 
 **Configs:** `experiment_config_exp3_gpt2.json`, `experiment_config_exp3_pythia.json`
 **Commands:**

@@ -24,7 +24,7 @@ import numpy as np
 
 
 # Alpha grid used by RidgeCV when alpha="auto" for any projection type.
-_ALPHA_GRID: List[float] = [0.01, 0.1, 1.0, 10.0, 100.0, 1000.0]
+_ALPHA_GRID: List[float] = [0.01, 0.1, 1.0, 10.0, 100.0, 1000.0, 10000.0]
 
 
 def _auto_alpha(X_train: np.ndarray, y_train: np.ndarray) -> float:
@@ -74,6 +74,8 @@ class LinearProjection:
         # SVD of W — populated by fit() and load()
         self._S: Optional[np.ndarray] = None    # (k,) singular values, k=min(clip,llm)
         self._Vt: Optional[np.ndarray] = None   # (k, llm_dim) right singular vectors
+        # Corpus statistics for confounder analysis — set externally after fit()
+        self.corpus_clip_centroid: Optional[np.ndarray] = None  # (clip_dim,)
 
     # ------------------------------------------------------------------
     # Training
@@ -207,6 +209,24 @@ class LinearProjection:
         out = (X @ self.W.T + self.b).astype(np.float32)
         return out.squeeze(0) if squeeze else out
 
+    def corpus_distance(self, probe_activation: np.ndarray) -> float:
+        """
+        Normalised L2 distance of *probe_activation* from the corpus centroid
+        in activation space.
+
+        Uses the z-score parameters (scaler_mean, scaler_scale) that were fitted
+        on the training corpus as the corpus statistics.  Equivalent to a
+        spherical Mahalanobis distance (diagonal covariance approximation).
+
+        A value of 1.0 means the probe sits one pooled standard deviation away
+        from the corpus mean.  Values > 3 indicate out-of-distribution probes.
+        """
+        if self.scaler_mean is None or self.scaler_scale is None:
+            raise RuntimeError("projection not trained — call .fit() first")
+        x = probe_activation.astype(np.float64)
+        z = (x - self.scaler_mean) / self.scaler_scale
+        return float(np.linalg.norm(z))
+
     # ------------------------------------------------------------------
     # Validation helpers
     # ------------------------------------------------------------------
@@ -282,6 +302,10 @@ class LinearProjection:
         if self._Vt is not None:
             np.save(d / "Vt.npy", self._Vt)
 
+        # Corpus statistics for confounder analysis
+        if self.corpus_clip_centroid is not None:
+            np.save(d / "corpus_clip_centroid.npy", self.corpus_clip_centroid)
+
         with open(d / "meta.json", "w") as f:
             json.dump(self._meta, f, indent=2)
 
@@ -309,6 +333,10 @@ class LinearProjection:
             with open(meta_path) as f:
                 proj._meta = json.load(f)
             proj.alpha = proj._meta.get("alpha", 1.0)
+
+        centroid_path = d / "corpus_clip_centroid.npy"
+        if centroid_path.exists():
+            proj.corpus_clip_centroid = np.load(centroid_path)
 
         return proj
 
@@ -381,6 +409,9 @@ class LayerProjectionSet:
         clip_train = clip_embeddings[train_idx]
         clip_val = clip_embeddings[val_idx]
 
+        # Corpus centroid in CLIP space — used for confounder analysis at generate time
+        clip_centroid = clip_train.mean(axis=0).astype(np.float32)
+
         val_metrics: Dict[int, Dict] = {}
 
         for layer_idx in sorted(llm_activations_per_layer.keys()):
@@ -398,6 +429,7 @@ class LayerProjectionSet:
                 normalize_llm=normalize_llm,
                 normalize_clip=normalize_clip,
             )
+            proj.corpus_clip_centroid = clip_centroid
             self.projections[layer_idx] = proj
 
             metrics = proj.validate(X_val, clip_val)
