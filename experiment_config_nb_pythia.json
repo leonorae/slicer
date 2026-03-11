@@ -15,7 +15,7 @@
 
   "projections": {
     "types": ["per_layer"],
-    "alpha_values": [1, 1000],
+    "alpha_values": [1, 1000, 10000],
     "training_data_size": 5000
   },
 
@@ -34,7 +34,7 @@
   "layers": [0, 1, 2, 3, 23],
 
   "cfg_values": [7.5],
-  "seeds": [42, 123, 777],
+  "seeds": [42, 123, 777, 456, 789, 101, 234, 567, 890, 111, 222, 333, 444, 555, 666, 999],
 
   "output": {
     "base_dir": "./experiment_results_nb_pythia",
