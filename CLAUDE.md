@@ -320,23 +320,49 @@ framing ("common" vs "unusual") would need to be re-labelled as "corpus-central"
 
 #### Architecture differences as confounders (not controlled)
 
-Four cross-model architecture effects are not independently controlled:
+The table below maps every key empirical finding to its model scope.  Any result
+marked "GPT-2 only" or "Pythia only" should not be generalised until replicated on
+at least one additional model.
 
-1. **L0 singularity is GPT-2-specific** — Pythia-410m has finite, stable condition
-   numbers at L0 for every alpha.  Architectural cause unknown; could be embedding
-   initialisation, weight tying, or pretraining corpus differences.
+| Observation | Scope | Likely architectural cause | Generalises? |
+|---|---|---|---|
+| L0 rank-deficiency at low alpha | **GPT-2 only** | Weight tying between embedding and unembedding matrices; GPT-2 ties input and output embeddings, which may constrain the activation manifold at L0 | Unknown |
+| Finite, stable L0 condition numbers | **Pythia only** | Pythia does not tie embeddings; separate initialisation gives L0 activations a full-rank covariance | Unknown |
+| Erank increases monotonically (α=1) | **GPT-2 only** | Smooth accumulation of representational capacity layer by layer | Not confirmed for Pythia |
+| Non-monotone erank at α=1000 (L0 peak, L1 dip) | **Pythia only** | Alpha differentially shrinks the embedding layer (different activation scale) vs. transformer layers; artefact of high regularisation, not semantic bottleneck | Unknown |
+| Erank plateau + slight drop at L22–23 (α=1) | **Pythia only** | Possible late-layer representational compression; only observed at α=1 | Unknown |
+| RidgeCV selects α=1000 for every layer | **Both models** | RidgeCV optimises R², which prefers high regularisation; this is a property of the scoring function, not the LLM | Likely universal |
+| R² vs nn_recall@5 pull in opposite directions | **Both models** | Structural conflict between reconstruction fidelity and topology preservation; not model-specific | Likely universal |
+| n_visible ≈ 767/768 at layers ≥ 1 | **Both models** | CLIP space is well-covered by both models' activations once any transformer processing has occurred | Plausibly general |
+| nn_recall@5 increases with layer depth (α=1) | **Both models** | Later layers encode more compositional/semantic content that aligns better with CLIP's training objective | Plausibly general |
 
-2. **Non-monotone erank at alpha=1000 in Pythia** (L0 peak, L1 dip) — only appears
-   at high regularisation.  May reflect alpha differentially compressing the embedding
-   layer vs. transformer layers due to different activation magnitudes, rather than a
-   semantic bottleneck.
+**Architectural candidates for the L0 differences:**
 
-3. **RidgeCV ceiling effect is cross-model** — auto → alpha=1000 for every layer in
-   both models.  Confirms the effect is a property of RidgeCV + R² scoring, not of a
-   specific model.
+- *Weight tying* (GPT-2) forces the output of the embedding layer to live in the same
+  subspace as the vocabulary embedding matrix.  If that matrix is low-rank relative to
+  the hidden dimension, the L0 activation covariance inherits that rank deficiency.
+  Pythia uses separate matrices, so no such constraint applies.
 
-4. **R² vs nn_recall tension is cross-model** — confirms the conflict is structural,
-   not a GPT-2 artifact.
+- *Initialisation scale* differs between architectures.  If GPT-2's L0 activations
+  have a near-degenerate covariance structure (many very small eigenvalues), then at
+  low alpha the Ridge estimator overfits those directions, producing apparent singularity
+  in the condition number.
+
+- *Pretraining corpus distribution* cannot be ruled out.  GPT-2 was trained on WebText;
+  Pythia on The Pile.  Different corpus statistics may produce different activation
+  covariance structures at L0 independent of weight tying.
+
+**What is NOT controlled:**
+
+- All SVD metrics compare models trained on different corpora with different
+  tokenizers.  Observed differences in erank or condition number could reflect corpus
+  statistics rather than architecture.
+- L0 is the embedding layer in both models, but its role differs: GPT-2's tied
+  embeddings mean L0 directly reflects vocabulary statistics; Pythia's untied L0 does
+  not.  Comparing L0 across models is comparing qualitatively different computational
+  stages.
+- Depth is not matched: GPT-2 has 12 layers, Pythia-410m has 24.  "Last layer"
+  comparisons conflate layer depth with depth as a fraction of total network depth.
 - `generate` phase with non-GPT-2 models was blocked by a `model_id` kwarg bug
   (now fixed in `experiment.py:_load_sd`).
 
