@@ -126,7 +126,8 @@ def main() -> None:
     if args.n_train is not None:
         config.setdefault("projections", {})["training_data_size"] = args.n_train
 
-    # Training texts
+    # Training texts — only needed for the train phase
+    need_corpus = "train" in args.phase
     if args.training_texts_file:
         texts_path = Path(args.training_texts_file)
         if not texts_path.exists():
@@ -139,7 +140,7 @@ def main() -> None:
         ]
         print(f"Loaded {len(training_texts)} training texts from {texts_path}")
 
-    elif args.auto_corpus or config.get("use_auto_corpus", False):
+    elif need_corpus and (args.auto_corpus or config.get("use_auto_corpus", False)):
         from diffusion_microscope.training_data import load_training_corpus, ALL_SOURCES
 
         sources_raw = [s.strip() for s in args.corpus_sources.split(",") if s.strip()]
@@ -154,7 +155,7 @@ def main() -> None:
         print(f"Building auto corpus: n={n_train}, sources={sources_raw}")
         training_texts = load_training_corpus(n_total=n_train, sources=tuple(sources_raw))
 
-    else:
+    elif need_corpus:
         # Minimal built-in fallback
         training_texts = [
             "a cat on a roof",
@@ -167,6 +168,8 @@ def main() -> None:
             f"Using {len(training_texts)} built-in training texts "
             "(pass --auto_corpus for better results)"
         )
+    else:
+        training_texts = []
 
     phases = args.phase
     base_dir = config.get("output", {}).get("base_dir", "./experiment_results")
