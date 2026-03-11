@@ -337,6 +337,15 @@ These metrics let you:
 - Distinguish "LPIPS is high because CLIP vectors differ" from "LPIPS is high because SD prior noise differs" using `mean_pixel_var`
 - Control for prompt length (`n_tokens`) and pretraining-corpus membership (`perplexity`) in cross-tier or cross-model comparisons
 
+**`manifest["probe_clip_vectors"][proj_key][slug][layer_idx]`** — per (proj, probe, layer):
+
+- The projected CLIP vector as a Python list of floats.  Stored during the `generate`
+  phase (free, since the vector is already computed for SD conditioning).  Enables
+  cosine distance computation between projections at different alpha values without
+  reloading the LLM or SD.  This is the **primary discriminability metric** for Exp 1
+  and Exp 3: `cosine_distance(proj_α1(act), proj_α1000(act))` is CFG-independent and
+  directly answers whether compression moved the CLIP vector.
+
 **Sanity check:** For "a cat", `d_act` should be lower than for "the color of Tuesday"
 across all layers and both models.  If it is not, the corpus centroid distance is not
 capturing expected structure and warrants investigation.
@@ -407,22 +416,26 @@ All need full re-runs (train + generate + grids) due to expanded design.
 
 ### Exp 1 — Alpha compression visibility
 
-**Goal:** Validate that nn_recall@5 predicts visual discriminability.
-**Hypothesis:** alpha=1 images are more distinct per probe than alpha=1000 images.
-LPIPS between alpha=1 and alpha=1000 for the same prompt quantifies how much
-information the compressor destroys.
+**Goal:** Validate that nn_recall@5 predicts discriminability under alpha compression.
+**Hypothesis:** alpha=1 produces more distinct CLIP projections per probe than alpha=1000.
+The primary evidence is geometric; the images are secondary illustration.
 
 **Design:**
 - Models: GPT-2 (last layer L11) and Pythia-410m (last layer L23) — run separately
 - Alpha: 1, 1000, and 10000 (to show full collapse trajectory)
 - Probe set: concrete + abstract (see configs)
 - CFG: 7.5 (fixed; acts as gain on conditioning — see confounder table)
-- Seeds: 16 (for seed-variance estimation alongside LPIPS; Phase 4 metric)
+- Seeds: 16 (for seed-variance estimation; Phase 4 metric)
 - Layers: last layer only (`layers: [11]` for GPT-2, `[23]` for Pythia)
 
-**Analysis:** For each probe, compute LPIPS(alpha=1 image, alpha=1000 image).
-If nn_recall@5 is a good proxy for visual discriminability, LPIPS should be
-higher for abstract prompts (lower nn_recall at high alpha) than concrete ones.
+**Analysis (primary):** `cosine_distance(proj_α1(act), proj_α1000(act))` per probe,
+stored in `manifest["probe_clip_vectors"]`. CFG-independent. Tests whether alpha
+compression moves the CLIP vector and whether this differs by probe tier.
+
+**Analysis (secondary):** LPIPS(alpha=1 image, alpha=1000 image) as a downstream
+visibility check. Only meaningful if it correlates with CLIP cosine distance — a flat
+scatter means CFG=7.5 is below the sensitivity floor for these probes. Seed variance
+is the noise floor below which LPIPS cannot distinguish conditioning from prior.
 
 **Configs:** `experiment_config_exp1_gpt2.json`, `experiment_config_exp1_pythia.json`
 **Commands:**
@@ -480,13 +493,19 @@ near the corpus mean — their projection is insensitive to alpha compression.
 - Layers: last layer of each model
 - Seeds: 16 (same set as Exp 1; enables seed-variance comparison across tiers)
 
-**Analysis:** LPIPS(alpha=1, alpha=1000) per probe. Test whether LPIPS ranks
-probes by tier: unusual > common-abstract > common-concrete.
+**Analysis (primary):** `cosine_distance(proj_α1(act), proj_α1000(act))` per probe,
+grouped by tier. Tests the tier hypothesis in CLIP space directly without SD or CFG.
+Partial correlation against `d_act` (corpus-distance confound) and `n_tokens`
+(prompt-length confound) determines whether the tier ordering is genuine.
+
+**Analysis (secondary):** LPIPS(alpha=1, alpha=1000) per probe, with scatter against
+CLIP cosine distance to verify it tracks the geometric signal. If the scatter is flat,
+LPIPS is below the CFG=7.5 sensitivity floor and the images cannot be used as evidence.
 
 **Confound to watch:** low-variance directions in the *projection* ≠ semantically
-unusual prompts — they could be directions with sparse corpus coverage. The
-experiment tests the surface correlation; a follow-up would compare against
-activation-space distance from the corpus centroid as an independent novelty measure.
+unusual prompts — they could be directions with sparse corpus coverage (`d_act`).
+A tier ordering in cosine distance that survives partial correlation against `d_act`
+is genuine; one that disappears is a corpus-coverage artefact.
 
 **Configs:** `experiment_config_exp3_gpt2.json`, `experiment_config_exp3_pythia.json`
 **Commands:**

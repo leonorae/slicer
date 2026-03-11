@@ -434,6 +434,18 @@ class ExperimentRunner:
                         clip_vec = proj.transform(layer_idx, activation)
                     else:
                         clip_vec = proj.transform(activation)
+
+                    # Store the projected CLIP vector so downstream analysis
+                    # can compute cosine distances between projections at
+                    # different alpha values directly in CLIP space — the
+                    # primary discriminability metric — without reloading the
+                    # LLM or SD.
+                    # Structure: probe_clip_vectors[proj_key][slug][layer_idx]
+                    self.manifest \
+                        .setdefault("probe_clip_vectors", {}) \
+                        .setdefault(key, {}) \
+                        .setdefault(slug, {})[str(layer_idx)] = clip_vec.tolist()
+
                     for cfg in cfg_scales:
                         seed_rel_paths: List[str] = []
                         for seed in seeds:
