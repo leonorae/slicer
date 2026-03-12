@@ -612,6 +612,34 @@ probe semantics lost).  At alpha=1, b is a small additive term — the knob bare
 So for generation it is intentionally a "high-alpha aesthetic" tool; for science it is
 a diagnostic of how much b vs. W explains observed image patterns.
 
+#### What the two alpha regimes represent
+
+A useful interpretive frame for the alpha axis:
+
+- **α=1 (low): LLM geometry decoded through CLIP.**  W·act dominates.  The image
+  reflects what the LLM activation looks like in the part of concept-space CLIP
+  understands — specifically, the axes of variation in activation space that a
+  CLIP-predictive linear map found useful.  This is not the full LLM geometry; it is
+  the intersection of what the LLM encodes and what CLIP cares about.  If the LLM
+  represents something CLIP is blind to, W won't preserve it.
+
+- **α≈1000 (high): corpus prior.**  b dominates.  The image reflects what the
+  training corpus assumes everything looks like — the corpus's modal CLIP vector.
+  Crucially, this is *not* the LLM's internal representation of the domain; it is
+  what the training data looks like on average to CLIP.  The warm amber brickwork
+  is what Flickr30k looks like on average, not what GPT-2 "thinks" the world looks
+  like.  That gap between corpus prior and LLM geometry is where the signal lives
+  at low alpha.
+
+- **α≈10–100 (intermediate): blend.**  Topology still reasonably intact (nn_recall
+  data shows this) but domain tinting beginning.  Possibly the regime where probe
+  discrimination coexists with corpus aesthetic — corpus as mood rather than
+  takeover.  Whether this produces more coherent or more interesting images than
+  either extreme is an open question. [claude, 2026-03-12]
+
+The cleaner reframe: α=1 answers "what does this LLM activation look like in
+concept-space?"; α=1000 answers "what does the corpus assume everything looks like?"
+
 ### LPIPS results (Exp 3 bar charts, both models)
 
 > **Scope:** Pythia-410m L23 and GPT-2 L11, all three alpha pairs (α=1 vs 1000, α=1 vs
