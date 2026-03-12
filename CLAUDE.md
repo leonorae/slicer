@@ -583,6 +583,35 @@ probe tiers; corpus-distance confound is weak).  The tension matters in three sp
    "reachable" means.  For relative comparisons (layer sweep variance trajectory, tier
    ordering within an experiment), it does not matter.  For absolute claims it does.
 
+#### Corpus centroid as a generative knob — practical directions
+
+The corpus changes both W (the projection matrix) and b (the bias / centroid).  As α→∞,
+W→0 and the output converges to b alone.  This makes the corpus centroid a tunable
+"ambient style" parameter with three distinct uses:
+
+**1. Domain-tinted image generation.**  Train Ridge on a domain-specific corpus
+(Impressionist painting descriptions, astronomy photography, architectural images).
+The centroid shifts to that domain's modal CLIP vector.  At moderate alpha: probe
+semantics tinted by corpus aesthetic.  At high alpha: pure domain atmosphere,
+probe-independent.  Cost: one `train` re-run, nothing else changes.
+
+**2. Decomposing W vs. b contributions (diagnostic).**  Run the same probes with two
+corpora (e.g. image-captions vs. text-heavy) at alpha=1 and high alpha.  At high alpha,
+only b differs between the two runs; at alpha=1, W also differs.  The difference between
+alpha conditions, across corpora, separates centroid contribution from projection
+contribution — a clean measurement without modifying the pipeline.
+
+**3. Corpus-stability test for the layer sweep.**  If the convergence layer (minimum
+mean_pixel_var in Exp 4) is a network-structure property, it should be stable across
+corpora — only the visual style at the convergence layer changes, not the layer index
+itself.  If the convergence layer shifts with corpus, the corpus is doing more work
+than expected.  A second Exp 4 run with a different corpus resolves this cheaply.
+
+**The practical limit:** b is maximally active at high alpha (compression regime, W→0,
+probe semantics lost).  At alpha=1, b is a small additive term — the knob barely fires.
+So for generation it is intentionally a "high-alpha aesthetic" tool; for science it is
+a diagnostic of how much b vs. W explains observed image patterns.
+
 ### LPIPS results (Exp 3 bar charts, both models)
 
 > **Scope:** Pythia-410m L23 and GPT-2 L11, all three alpha pairs (α=1 vs 1000, α=1 vs
