@@ -287,7 +287,7 @@ the semantic signal from the corpus-coverage signal without an independent measu
 | **Prompt length** | **Moderate (Exp 3)** | Unusual tier probes are systematically longer ("the feeling of almost remembering" = 7 tokens vs "a cat" = 3). Last-token activation depends on context length. Controlled by `n_tokens` in `probe_text_stats`. |
 | **LLM pretraining corpus distance** | **Moderate (cross-model)** | GPT-2 and Pythia assign different perplexities to the same probe reflecting WebText vs Pile coverage differences. Controlled by `perplexity` in `probe_text_stats`. |
 | **Diffusion prior variance** | **Moderate (all LPIPS)** | Some LPIPS signal between alpha=1 and alpha=1000 images could reflect different amounts of diffusion-prior noise rather than genuine CLIP-vector differences. Controlled by `seed_variance` in manifest: compare variance at alpha=1 vs alpha=1000 for the same probe. |
-| **CFG scale** | **Fixed parameter** | CFG=7.5 is held constant. CFG acts as a gain on the conditioning signal — high CFG amplifies CLIP vector differences, low CFG adds prior noise. Not a confound for within-experiment comparisons (same CFG for all alpha values), but limits generalisability of absolute LPIPS values to other CFG settings. |
+| **CFG scale** | **Fixed parameter** | CFG=7.5 is held constant in Exp 1–3. **Updated standard: CFG=25 for Exp 4+.** Rationale: at CFG=7.5 Pythia's highest probes (cosine_dist ≈ 0.07) sit only 0.09 LPIPS above the noise floor (~0.43); amplification math [claude, 2026-03-12] estimates CFG≈14 as the minimum to reach LPIPS=0.60, CFG=25 gives comfortable margin. Hypothesised ceiling around CFG=30–40 where SD images become fully saturated and LPIPS measures saturation artefacts rather than conditioning content [claude, 2026-03-12]. CFG acts as a gain on the conditioning signal — high CFG amplifies CLIP vector differences, low CFG adds prior noise. Not a confound for within-experiment comparisons (same CFG for all alpha values), but limits generalisability of absolute LPIPS values to other CFG settings. |
 | **nn_recall@5 as proxy for probe discriminability** | **Proxy validity** | nn_recall is computed on corpus validation data; it does not predict behaviour on out-of-distribution probes |
 | **Cross-model LPIPS comparison** | **Moderate** | GPT-2 and Pythia-410m have different pretraining corpora; the same probe text may sit at different distances from each model's internal distribution |
 | **SVD metrics (erank, condition_number, n_visible)** | **None** | Computed on the projection matrix W alone; probe texts are not involved |
@@ -350,6 +350,66 @@ These metrics let you:
 across all layers and both models.  If it is not, the corpus centroid distance is not
 capturing expected structure and warrants investigation.
 
+#### Why LPIPS is the wrong primary metric, and the CFG sensitivity floor
+
+LPIPS adds three uncontrolled steps between the quantity of interest (CLIP vector
+differences) and the measurement: SD rendering, diffusion prior noise, and AlexNet's
+perceptual model.  The actual question — does alpha compression destroy information in
+the CLIP projection? — is answerable directly in CLIP space.
+
+**CFG sensitivity floor mechanics:**
+CFG applies as `ε_out = ε_uncond + s·(ε_cond − ε_uncond)`.  The effective deviation
+from unconditional generation scales linearly with CFG.  This means LPIPS is roughly a
+function of `(CLIP cosine distance × CFG)`, not CLIP distance alone.  Below some
+threshold CLIP distance δ, even CFG=7.5 cannot amplify the difference above the
+seed-variance noise floor — LPIPS measures noise, not signal.  δ is unknown without
+sweeping both CFG and CLIP distance, which is a separate experiment.
+
+**Consequence for Exp 1 and Exp 3:**  it is not known in advance whether the probe
+pairs of interest (e.g. alpha=1 vs alpha=1000 for "a cat") produce CLIP distances above
+or below δ.  If all probes are below δ, LPIPS tier ordering is entirely noise.  The
+scatter of LPIPS vs. CLIP cosine distance (implemented in the notebook) characterises
+δ empirically: if the scatter is flat, the images are not a reliable diagnostic at
+CFG=7.5.
+
+**Metric hierarchy:**
+1. `cosine_distance(proj_α1(act), proj_α1000(act))` — primary.  CFG-independent,
+   SD-independent.  Stored in `manifest["probe_clip_vectors"]`.
+2. LPIPS — secondary confirmation.  Valid only if it correlates with (1).  Seed variance
+   is its noise floor.
+3. Images — illustrative only.  Cannot be used as primary evidence.
+
+#### Multicollinearity between d_act and compression displacement
+
+The partial correlation `cosine_distance(α1, α1000) ~ tier | d_act` assumes that
+`d_act` and cosine distance have residual variance not accounted for by corpus distance
+alone.  This may not hold.
+
+**Geometric argument:** the compression displacement is
+`(W_α1 − W_α1000) · (act − μ)`, which scales proportionally with `‖act − μ‖`
+(i.e. d_act) whenever `(W_α1 − W_α1000)` has approximately uniform singular values.
+Given n_visible ≈ 767/768 and a smooth spectrum for both models, this is likely.
+If `r(d_act, cosine_dist) > 0.9`, the partial correlation has very little residual
+variance to work with — low statistical power even if the tier effect is real.
+
+**The ratio alternative:** `cosine_distance(α1, α1000) / d_act` controls for corpus
+distance by construction without requiring residual variance.  Under the null (corpus
+distance is the complete explanation), this ratio is constant across tiers.  A tier
+ordering in the ratio is genuine — it cannot be explained by d_act alone.
+
+**When to prefer the ratio over partial correlation:**
+- Check the scatter of d_act vs. cosine_dist (implemented in the notebook).
+- If `|r| > 0.9`: use the ratio; partial correlation is uninformative.
+- If the scatter passes through the origin: proportional normalisation (ratio) is
+  correct.  If there is a meaningful non-zero intercept: use regression residuals instead.
+- The coefficient of variation of the ratio across tier means quantifies the effect
+  size: CoV < 0.15 ≈ flat (corpus distance explains everything); CoV > 0.15 suggests
+  a tier effect beyond corpus coverage.
+
+**Null result framing:** a flat ratio is not a failure — it means alpha compression is a
+pure corpus-coverage filter, operating proportionally on every probe regardless of
+semantic content.  This is itself informative about the geometry of the Ridge projection.
+
 #### What the confound does NOT invalidate
 
 Even if Exp 3 LPIPS differences are entirely explained by corpus distance, that finding
@@ -406,6 +466,268 @@ at least one additional model.
   comparisons conflate layer depth with depth as a fraction of total network depth.
 - `generate` phase with non-GPT-2 models was blocked by a `model_id` kwarg bug
   (now fixed in `experiment.py:_load_sd`).
+
+---
+
+## Observed results — Exp 1 & 3 (GPT-2 L11, Pythia-410m L23, 5000-sample corpus)
+
+> **Status:** Primary metric (CLIP cosine distance) computed. LPIPS now run (Exp 3
+> bar charts). Both confirm the CFG sensitivity floor failure mode — see LPIPS section below.
+> Corpus quality is acknowledged as a limitation throughout — see caveat at end of section.
+
+### Alpha compression plateau (both models)
+
+The α=1000 vs α=10000 cosine distances are roughly 1/5th the α=1 vs α=10000 distances
+for every probe and both models.  Nearly all compression happens in the α=1 → α=1000 step;
+α=10000 adds little beyond α=1000.  The α=10000 condition is largely redundant for image
+generation purposes.  This is consistent with the erank plateau observed in the SVD analysis.
+
+### Collinearity results
+
+| Model | r(d_act, cosine_dist) | Interpretation |
+|---|---|---|
+| GPT-2 L11 | 0.998 | Driven entirely by one outlier (democracy, d_act ≈ 1100). Partial correlation is uninformative. |
+| Pythia-410m L23 | 0.700 | Below the 0.9 threshold. Partial correlation has some residual power. |
+
+### GPT-2 L11 — key findings
+
+- **Democracy is a pathological outlier.** d_act ≈ 1100 vs all other probes < 100 —
+  a >10× separation.  Its absolute cosine displacement (≈ 0.45) dominates the abstract tier
+  mean entirely.  This is not semantic unusualness; it is corpus-coverage absence.
+  "Democracy" does not appear in Flickr30k/CC3M (image-caption sources); the Ridge map
+  has no training signal for it and places its activation far from the corpus centroid.
+- **The abstract tier is incoherent for GPT-2.** With democracy as an outlier and only
+  ~3 probes per tier, the abstract mean and variance are unreliable.  The tier cannot be
+  interpreted as a category.
+- **After normalisation (ratio), the ordering is unusual > abstract > concrete** (CoV = 0.37,
+  above the 0.15 threshold).  Democracy's ratio (≈ 0.00041) is lower than the unusual tier
+  mean — meaning democracy is *less* compression-sensitive per unit corpus distance than the
+  unusual probes, despite its extreme absolute displacement.  The unusual tier being highest
+  in the ratio is the result that survives the confound.
+- **The r=0.998 line is not a genuine proportionality relationship.** Remove democracy and the
+  correlation would be near zero.  Do not interpret this as evidence that corpus distance
+  mechanistically explains compression sensitivity across the probe set.
+
+### Pythia-410m L23 — key findings
+
+- **d_act is nearly constant across all probes** (range 27.5–31.5, ≈ 4-unit spread across 11
+  probes).  For Pythia, the corpus-distance confound barely exists — all probes sit at
+  roughly equal distance from the corpus centroid in activation space.  Controlling for d_act
+  changes almost nothing.
+- **Ordering: unusual > abstract > concrete** in raw cosine distance and in ratio (CoV = 0.16,
+  marginally above the 0.15 threshold).
+- **The narrow d_act range makes Pythia the cleaner test of the hypothesis.** The variation in
+  cosine distance across probes is not explained by variation in corpus distance (because there
+  is almost no variation in corpus distance).  The unusual tier having higher cosine displacement
+  than concrete is therefore attributable to something other than corpus peripherality.
+- **"entropy" (abstract) and "the color of Tuesday" (unusual) are both near the top of the
+  cosine distance distribution**, with "a tree" and "a house" at the bottom.  This is
+  qualitatively consistent with the tier hypothesis but the within-tier variance is large
+  relative to the between-tier differences.
+
+### Cross-model summary
+
+| Finding | GPT-2 L11 | Pythia-410m L23 |
+|---|---|---|
+| Compression plateau at α ≈ 1000 | Yes | Yes |
+| r(d_act, cosine_dist) | 0.998 (outlier-driven) | 0.700 |
+| d_act range across probes | 20–1100 (heterogeneous) | 27.5–31.5 (homogeneous) |
+| Ratio ordering | unusual > abstract > concrete | unusual > abstract > concrete |
+| Ratio CoV | 0.37 | 0.16 |
+| Dominant confound | Democracy outlier (corpus absence) | Weak — d_act nearly constant |
+| Abstract tier reliability | Low (incoherent due to outlier) | Moderate |
+
+**The one consistent finding:** unusual > concrete in the compression ratio holds across both
+models and is not explainable by d_act alone in either case.  The abstract tier is noisy in
+both models (incoherent in GPT-2; moderate variance in Pythia).
+
+**What is NOT confirmed:** the full unusual > abstract > concrete tier ordering is not
+established with sufficient reliability for either model at current probe n and corpus size.
+
+### Corpus quality caveat
+
+The 5000-sample corpus draws heavily from image-caption sources (Flickr30k, CC3M).  Probes
+with no visual referent — "democracy", "justice", and to some extent all abstract/unusual
+tier probes — are structurally underrepresented.  This means:
+
+- d_act for abstract/unusual probes reflects **corpus composition**, not semantic properties
+  of the probes.  Democracy's extreme d_act (≈ 1100) is a corpus artifact, not a finding
+  about GPT-2's representation of political concepts.
+- The tier classification conflates "semantically unusual" with "corpus-peripheral".  For
+  Pythia this conflation is less severe (narrow d_act range), but the underlying cause is
+  unclear — it may reflect Pythia's pretraining on The Pile (broader coverage) rather than
+  a genuine geometric property.
+- **None of these results should be considered publication-ready.** The probe set is small
+  (≈ 3 per tier), the corpus is thin for non-visual concepts, and the between-tier differences
+  are small relative to within-tier variance.  The current runs are exploratory and diagnostic.
+
+#### Corpus composition tension points (for future reference)
+
+The current image-caption-heavy corpus is adequate for Pythia (d_act homogeneous across
+probe tiers; corpus-distance confound is weak).  The tension matters in three specific cases:
+
+1. **Return to GPT-2 or any model where abstract probes produce extreme d_act.**  The
+   image-caption corpus causes structural underrepresentation of non-visual concepts, pushing
+   their activations far from the centroid.  Broadening toward Wikipedia/Pile-like sources
+   would reduce this artifact.
+
+2. **Broader corpus mixture as an aesthetic/generative parameter.**  The corpus centroid is
+   the α→∞ attractor — all probes compress toward the CLIP vector it encodes, which currently
+   maps to warm amber brickwork/architecture textures (the modal image in Flickr30k/CC3M).
+   Shifting corpus composition shifts this attractor: a text-heavy corpus would produce a
+   different "collapsed" image style.  Potentially interesting as a deliberate generative
+   parameter rather than a confound to eliminate. [noted for future exploration]
+
+3. **If absolute CLIP vector positions matter** — e.g. checking whether a probe hits a
+   specific semantic region of CLIP space — the corpus composition determines what
+   "reachable" means.  For relative comparisons (layer sweep variance trajectory, tier
+   ordering within an experiment), it does not matter.  For absolute claims it does.
+
+#### Corpus centroid as a generative knob — practical directions
+
+The corpus changes both W (the projection matrix) and b (the bias / centroid).  As α→∞,
+W→0 and the output converges to b alone.  This makes the corpus centroid a tunable
+"ambient style" parameter with three distinct uses:
+
+**1. Domain-tinted image generation.**  Train Ridge on a domain-specific corpus
+(Impressionist painting descriptions, astronomy photography, architectural images).
+The centroid shifts to that domain's modal CLIP vector.  At moderate alpha: probe
+semantics tinted by corpus aesthetic.  At high alpha: pure domain atmosphere,
+probe-independent.  Cost: one `train` re-run, nothing else changes.
+
+**2. Decomposing W vs. b contributions (diagnostic).**  Run the same probes with two
+corpora (e.g. image-captions vs. text-heavy) at alpha=1 and high alpha.  At high alpha,
+only b differs between the two runs; at alpha=1, W also differs.  The difference between
+alpha conditions, across corpora, separates centroid contribution from projection
+contribution — a clean measurement without modifying the pipeline.
+
+**3. Corpus-stability test for the layer sweep.**  If the convergence layer (minimum
+mean_pixel_var in Exp 4) is a network-structure property, it should be stable across
+corpora — only the visual style at the convergence layer changes, not the layer index
+itself.  If the convergence layer shifts with corpus, the corpus is doing more work
+than expected.  A second Exp 4 run with a different corpus resolves this cheaply.
+
+**The practical limit:** b is maximally active at high alpha (compression regime, W→0,
+probe semantics lost).  At alpha=1, b is a small additive term — the knob barely fires.
+So for generation it is intentionally a "high-alpha aesthetic" tool; for science it is
+a diagnostic of how much b vs. W explains observed image patterns.
+
+#### What the two alpha regimes represent
+
+A useful interpretive frame for the alpha axis:
+
+- **α=1 (low): LLM geometry decoded through CLIP.**  W·act dominates.  The image
+  reflects what the LLM activation looks like in the part of concept-space CLIP
+  understands — specifically, the axes of variation in activation space that a
+  CLIP-predictive linear map found useful.  This is not the full LLM geometry; it is
+  the intersection of what the LLM encodes and what CLIP cares about.  If the LLM
+  represents something CLIP is blind to, W won't preserve it.
+
+- **α≈1000 (high): corpus prior.**  b dominates.  The image reflects what the
+  training corpus assumes everything looks like — the corpus's modal CLIP vector.
+  Crucially, this is *not* the LLM's internal representation of the domain; it is
+  what the training data looks like on average to CLIP.  The warm amber brickwork
+  is what Flickr30k looks like on average, not what GPT-2 "thinks" the world looks
+  like.  That gap between corpus prior and LLM geometry is where the signal lives
+  at low alpha.
+
+- **α≈10–100 (intermediate): blend.**  Topology still reasonably intact (nn_recall
+  data shows this) but domain tinting beginning.  Possibly the regime where probe
+  discrimination coexists with corpus aesthetic — corpus as mood rather than
+  takeover.  Whether this produces more coherent or more interesting images than
+  either extreme is an open question. [claude, 2026-03-12]
+
+The cleaner reframe: α=1 answers "what does this LLM activation look like in
+concept-space?"; α=1000 answers "what does the corpus assume everything looks like?"
+
+### LPIPS results (Exp 3 bar charts, both models)
+
+> **Scope:** Pythia-410m L23 and GPT-2 L11, all three alpha pairs (α=1 vs 1000, α=1 vs
+> 10000, α=1000 vs 10000), tiers: concrete / abstract / unusual.
+
+**Main finding: LPIPS is flat across all tiers and both models.**
+
+All six panels cluster between **0.40–0.55 LPIPS** with heavily overlapping within-tier
+error bars (n≈3 per tier). The predicted ordering (unusual > abstract > concrete) is not
+confirmed in any panel.
+
+**The abstract tier is the lowest, not the middle, in most panels.** This is the
+democracy-outlier / projection-collapse effect: democracy is in the collapse regime
+(d_act ≈ 1100, output → SD prior noise), and prior noise looks similar *across* alpha
+values — producing low LPIPS, not high. The tier is incoherent.
+
+**The α=1000 vs α=10000 column is no smaller than the α=1 vs α=1000 column.**
+The compression plateau that was clear in CLIP cosine distance (~5× smaller) is
+invisible in LPIPS. LPIPS is too noisy to resolve the signal.
+
+**Interpretation: LPIPS is measuring diffusion prior noise, not conditioning signal.**
+These cosine distances are below the CFG=7.5 sensitivity floor (threshold δ from the
+confounder analysis).  CFG=7.5 cannot amplify the CLIP-vector differences into the
+perceptual regime — the images generated at α=1 and α=1000 differ by prior noise alone.
+This is exactly the failure mode predicted before the images were run.
+
+**Consequence for the metric hierarchy:**
+- CLIP cosine distance (primary metric) — valid.  Shows compression plateau, shows
+  unusual > concrete in the normalised ratio for Pythia.
+- LPIPS (secondary) — **not valid as evidence here**.  r(LPIPS, cosine_dist) is
+  effectively zero; the scatter is flat.  Images cannot be used to confirm or deny
+  the tier hypothesis at CFG=7.5.
+- Images — illustrative only; do not examine as primary evidence.
+
+**What would fix this:** sweep CFG (e.g. 3, 7.5, 15, 30) to find the threshold δ above
+which CLIP cosine distances of this magnitude become perceptually visible.  Alternatively,
+compute LPIPS on the extreme-alpha pairs at the layer sweep level once those images exist
+— earlier layers may produce larger cosine displacements that exceed δ.
+
+### LPIPS vs. cosine distance scatter (sensitivity floor characterisation)
+
+**GPT-2 L11 (r=0.93): single-point artefact.**
+Every probe except democracy clusters at cosine_dist < 0.1, LPIPS 0.38–0.50 — a flat
+cloud.  Democracy sits at cosine_dist ≈ 0.45, LPIPS ≈ 0.61, dragging r to 0.93.  Remove
+democracy and the correlation is near zero.  r=0.93 is *not* evidence that LPIPS reliably
+tracks cosine distance: democracy's extreme outlier status is doing all the work.
+Crucially, democracy *does* produce elevated LPIPS — the method is not broken, but the
+sensitivity threshold δ is somewhere above cosine_dist ≈ 0.1, and all other probes are
+far below it.
+
+**Pythia L23 (r=0.49): weak genuine correlation, one anomaly.**
+Probes spread across 0.02–0.075 cosine distance (consistent with homogeneous d_act).
+r=0.49 means LPIPS does partially track cosine distance for Pythia.  The unusual probes
+at the far right ("the color of Tuesday", "entropy at midnight") have both the highest
+cosine distances and the highest LPIPS (~0.52–0.53).  However, "the feeling of almost
+remembering" sits anomalously low — moderate cosine distance but the lowest LPIPS among
+unusual probes (~0.38).  This probe's CLIP vector moves in a direction SD does not
+differentiate perceptually, even though the geometric shift is real.
+
+**Sensitivity floor estimate (both models):**
+LPIPS ~0.40–0.43 is the empirical floor — below this, diffusion prior noise dominates.
+Even at Pythia's maximum cosine_dist ≈ 0.07, LPIPS only reaches ~0.53.  The δ threshold
+appears to require cosine_dist ≳ 0.1–0.3 at CFG=7.5.  This is achieved only by extreme
+d_act probes (democracy at 0.45) or by running at earlier layers with larger displacements.
+The Pythia unusual probes are approaching but not clearly above the floor.
+
+**What the scatter resolves:**
+- **r(LPIPS, cosine_dist) for GPT-2 is outlier-driven; for Pythia it is weak (0.49).**
+  Neither constitutes validation of LPIPS as a reliable secondary metric for these probes.
+- **Direction of CLIP movement matters, not just magnitude.**  "The feeling of almost
+  remembering" has real cosine displacement but low LPIPS — its compression shift is
+  orthogonal to SD's perceptually sensitive axes.  Cosine distance is necessary but not
+  sufficient to predict perceptual change.
+- **δ estimate constrains the CFG sweep design.**  To confirm the tier ordering visually,
+  either raise CFG until Pythia's 0.07 displacements exceed δ, or augment the probe set
+  with higher d_act probes in the ordinary-compression regime (not collapse like democracy).
+
+### Open questions for Exp 1 before moving on
+
+- **LPIPS vs. cosine distance scatter** — now run; see section above.
+- **Layer sweep for compression sensitivity** — all current results are last-layer only.
+  Whether compression sensitivity (ratio) increases with layer depth (consistent with the
+  erank trajectory) is unexamined.  Would require running generate across all layers, which
+  is not in the current Exp 1 config.
+- **Democracy as a control probe** — its d_act ≈ 1100 makes it useful as a high-corpus-distance
+  control, but it should not be analysed as a representative abstract probe.  Either exclude
+  it from the abstract tier or add it to a separate "corpus-absent" category with d_act > 500.
+- **CFG sweep** — superseded. CFG raised to 25 for Exp 4+ rather than running a full sweep. Amplification math [claude, 2026-03-12] indicates CFG=25 should push Pythia's highest probes (cosine_dist ≈ 0.07) clearly above the LPIPS floor; democracy at d_act≈1100 serves as calibration that the method is working. A sweep (3, 7.5, 15, 25, 30) could still characterise δ precisely but is deferred as lower priority than the layer sweep.
 
 ---
 
@@ -475,6 +797,115 @@ python run_experiment.py --config experiment_config_exp2_pythia.json --phase gri
 
 ---
 
+## Observed results — Exp 2 visual analysis (Pythia-410m, 5 seeds per condition)
+
+> **Scope note:** All visual findings in this section are from **Pythia-410m only**.
+> None have been replicated on GPT-2 or any other model. GPT-2 Exp 2 was not run
+> (L0 rank-deficiency at low alpha makes it unsuitable). Do not generalise.
+
+> **Seed counts:** 5 seeds shown per condition. Full dataset is 16 seeds per
+> (probe × alpha). Conclusions below are provisional pending full-set confirmation.
+
+### L2 is an inter-seed convergence point at alpha=1
+
+Across two probes ("a cat", "the color of Tuesday"), L2 shows tighter cross-seed
+agreement than adjacent layers. For "the color of Tuesday" L2 alpha=1, all 5 seeds
+produced nearly identical warm amber diagonal wave/weave textures — the strongest
+single-layer convergence observed in any condition. For "a cat" L2 alpha=1, seeds
+converged on a loose grey/white vertical-flow family (weaker but still the tightest
+within that probe's layer sweep). Convergence at L2 is probe-specific (different
+textures for different probes, not all collapsing to the same point). L1 and L3 are
+more variable in both cases. This is not predicted by the erank trajectory and has no
+current geometric explanation.
+
+### The L0→L1 transition is probe-dependent
+
+For "beauty" alpha=1 (from Exp 2 grid, single seed): L0 was near-blank; L1 introduced
+dramatic high-contrast snake-scale structure. The token embedding alone contributed
+almost no visual information; the first transformer layer inserted structure entirely.
+
+For "a cat" alpha=1: L0 already had structured fragmented content. L1 changed its
+character but did not amplify it from near-zero. The embedding layer for a common
+concrete token has a non-trivial projection; the embedding layer for an abstract token
+may not.
+
+This difference is consistent with the hypothesis that common tokens have well-defined
+embedding-space projections into CLIP space, while abstract tokens begin near the
+corpus centroid and acquire visual identity only after transformer computation.
+**Caveat:** single-seed observations from the Exp 2 grid; not confirmed at seed level.
+
+### Compression stabilises unusual probes more than concrete probes at L23
+
+"The color of Tuesday" L23 alpha=1: bimodal (yellow/purple geometric maze OR
+black/sandy blobs — two coherent attractor groups across 5 seeds).
+"The color of Tuesday" L23 alpha=1000: unimodal (all 5 seeds → same horizontal amber
+banded pattern). Compression resolved the bimodal split.
+
+"A cat" L23 alpha=1: five distinct visual types, no clustering — genuinely high
+variance with no dominant attractor.
+"A cat" L23 alpha=1000: still five distinct visual types — compression did not resolve
+cat's L23 variability.
+
+**Interpretation:** Compression moves projections toward the corpus centroid, which maps
+to a well-defined SD attractor (warm amber brickwork/architecture). Unusual probes sit
+far from the centroid and are pushed toward it, gaining coherence. Concrete probes
+("a cat") may sit in a broad, diverse region of CLIP space where even the corpus
+centroid maps to a high-entropy SD neighbourhood — many plausible image types remain
+after compression. The concrete probe does not gain visual coherence from compression
+because its compressed destination is itself ambiguous to SD.
+
+**Important caveat:** this is the opposite of what the Exp 3 hypothesis predicted
+(concrete probes should be alpha-*insensitive*, not alpha-incoherent). The finding
+is about seed variance, not cosine distance. High seed variance at alpha=1000 is not
+the same as high cosine distance between alpha=1 and alpha=1000.
+
+### Two qualitatively different compression failure modes (GPT-2 observation)
+
+From GPT-2 Exp 3 results: "democracy" (d_act ≈ 1100) produces images visually
+indistinguishable from SD null noise (no-prompt / nonsense-prompt output). Other
+probes with moderate d_act produce recognisable corpus-like textures under compression.
+
+This identifies two failure modes:
+1. **Ordinary compression** (moderate d_act): W·(act − μ) shrinks; output → bias b →
+   corpus centroid → recognisable corpus-like textures (warm amber, fur, landscape).
+2. **Projection collapse** (extreme d_act, e.g. democracy): the Ridge map has zero
+   training signal for this activation region; even the bias term b is unreliable;
+   output → near-zero CLIP conditioning → SD prior noise.
+
+The threshold between these modes defines the effective coverage radius of the Ridge
+projection. It is estimable from GPT-2 data by ordering probes by d_act and finding
+where output transitions from "corpus texture" to "prior noise." Democracy at d_act ≈
+1100 is in the collapse regime; all other current probes appear to be in the ordinary
+compression regime.
+
+**Consequence for Exp 3:** The GPT-2 abstract tier mixes both failure modes ("beauty"
+→ ordinary compression, "democracy" → projection collapse). The tier is incoherent
+not only because n is small but because it contains qualitatively different projection
+behaviours. Democracy should be treated as a high-d_act diagnostic control, not an
+abstract-concept probe.
+
+### Limitations of current Exp 2 visual results — to fix in layer sweep design
+
+The following limitations apply to all visual findings above. A planned layer sweep
+experiment should address them:
+
+| Limitation | Effect | Fix |
+|---|---|---|
+| Only 5 of 16 seeds shown | Convergence/divergence conclusions are provisional | Run full 16-seed analysis; compute mean_pixel_var from manifest |
+| Only L0, L1, L2, L3, L23 sampled | L2 convergence peak is inferred, not traced | Sweep all 24 layers to find the actual variance minimum |
+| Only two probes compared ("a cat", "the color of Tuesday") | Cross-probe conclusions have n=2 | Add remaining Exp 3 probes to the layer sweep |
+| Single alpha per condition for cross-alpha comparison | Compression effect at intermediate layers uncharacterised | Run alpha=1 and alpha=1000 for all layers, not just last layer |
+| No quantitative seed variance metric used | Visual judgement of coherence is subjective | Use `mean_pixel_var` from manifest to find convergence layer objectively |
+| Pythia only | No cross-model confirmation | Replicate on GPT-2 once L0 rank issue is handled (use alpha ≥ 100 for L0) |
+| Exp 2 grid images (single seed) used alongside seed-stack images | Single-seed observations mixed with multi-seed observations | Separate claims made from single-seed vs. multi-seed data |
+
+**The key open question the layer sweep addresses:** Is L2 convergence a genuine local
+minimum in seed variance, and does it hold across all probes? The current data shows
+it for two probes but cannot determine whether it is a property of Pythia's early-layer
+geometry or an artefact of the specific probes chosen.
+
+---
+
 ### Exp 3 — Alpha sensitivity as novelty detector
 
 **Goal:** Test whether alpha sensitivity correlates with prompt unusualness.
@@ -515,3 +946,62 @@ python run_experiment.py --config experiment_config_exp3_gpt2.json --phase grids
 python run_experiment.py --config experiment_config_exp3_pythia.json --phase generate
 python run_experiment.py --config experiment_config_exp3_pythia.json --phase grids
 ```
+
+---
+
+### Exp 4 — Full layer sweep (Pythia-410m, seed variance trajectory)
+
+**Goal:** Find where in Pythia's layer hierarchy seed variance is minimised (the
+convergence layer), and whether L2 as a local minimum holds across the full probe set.
+Secondarily, produce per-layer activation cache for all probes to enable direct
+comparison with upcoming novel projection metrics.
+
+**Background:** Exp 2 visual analysis (2 probes, 5 seeds, L0–L3 + L23 only) suggested
+L2 as an inter-seed convergence point.  That observation is unconfirmed: only two probes,
+only 5 seeds shown, only 5 of 24 layers sampled.
+
+**Model: Pythia-410m only.**  GPT-2 L0 is rank-deficient at alpha=1 (unusable without
+complicating the sweep with alpha≥100 for that layer).  Pythia has 24 layers (richer
+trajectory), homogeneous d_act across probes (corpus-distance confound is weak), and
+is the target model for upcoming novel projection metrics work.
+
+**Design:**
+- Model: `EleutherAI/pythia-410m`
+- Layers: all 24 (L0–L23)
+- Alpha: 1 only [alpha=1000 deferred; doubles compute; cross-alpha question partially
+  answered at L23 by Exp 1/3; add if signal is found]
+- CFG: 25 (new standard; see CFG scale row in confounder table)
+- Seeds: 16 (consistent with Exp 1/3; needed for reliable `mean_pixel_var`)
+- Probes: full Exp 3 set (all 9: concrete + abstract + unusual tiers)
+  — democracy included as high-d_act control; treated separately, not as abstract-tier member
+- Corpus: 5000-sample, same sources as Exp 1/3 (comparability with prior per-layer SVD
+  results and Exp 3 compression ratios; convergence layer is more a network-structure
+  property than corpus-dependent)
+- track_lpips: False (seed variance is the primary output; LPIPS too noisy)
+
+**Primary metric:** `manifest["seed_variance"][key]["mean_pixel_var"]` per (probe, layer).
+Plot: layer (x) vs. mean_pixel_var (y), one line per probe.  Find the layer of minimum
+variance and whether it is consistent across probes.
+
+**Secondary:** `manifest["probe_clip_vectors"]` per (probe, layer) — enables cosine
+distance between adjacent layers (layer-to-layer CLIP drift) and comparison with novel
+projection metrics on the same axis.
+
+**Coordination with novel projection metrics:** The `generate` phase populates
+`.probe_cache/{slug}/layer_{N}.npy` for all 24 layers and all 9 probes.  Novel
+projection methods should read from this cache (same slugs, same layer indices) to
+avoid re-running the LLM.  The `probe_clip_vectors` stored in `manifest` serve as
+a Ridge-projection baseline for direct comparison against whatever new metric produces.
+
+**Config:** `experiment_config_exp4_pythia_layersweep.json`
+**Commands:**
+```bash
+python run_experiment.py --config experiment_config_exp4_pythia_layersweep.json --phase train
+python run_experiment.py --config experiment_config_exp4_pythia_layersweep.json --phase generate
+python run_experiment.py --config experiment_config_exp4_pythia_layersweep.json --phase grids
+```
+
+**Key question:** Is L2 a genuine local minimum in mean_pixel_var across all probes,
+or was it an artefact of the two probes in Exp 2?  A consistent minimum at L2 across
+concrete, abstract, and unusual tiers would be a strong signal; probe-specific minima
+at different layers would suggest the convergence point is semantics-dependent.
