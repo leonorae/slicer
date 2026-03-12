@@ -561,6 +561,28 @@ tier probes — are structurally underrepresented.  This means:
   (≈ 3 per tier), the corpus is thin for non-visual concepts, and the between-tier differences
   are small relative to within-tier variance.  The current runs are exploratory and diagnostic.
 
+#### Corpus composition tension points (for future reference)
+
+The current image-caption-heavy corpus is adequate for Pythia (d_act homogeneous across
+probe tiers; corpus-distance confound is weak).  The tension matters in three specific cases:
+
+1. **Return to GPT-2 or any model where abstract probes produce extreme d_act.**  The
+   image-caption corpus causes structural underrepresentation of non-visual concepts, pushing
+   their activations far from the centroid.  Broadening toward Wikipedia/Pile-like sources
+   would reduce this artifact.
+
+2. **Broader corpus mixture as an aesthetic/generative parameter.**  The corpus centroid is
+   the α→∞ attractor — all probes compress toward the CLIP vector it encodes, which currently
+   maps to warm amber brickwork/architecture textures (the modal image in Flickr30k/CC3M).
+   Shifting corpus composition shifts this attractor: a text-heavy corpus would produce a
+   different "collapsed" image style.  Potentially interesting as a deliberate generative
+   parameter rather than a confound to eliminate. [noted for future exploration]
+
+3. **If absolute CLIP vector positions matter** — e.g. checking whether a probe hits a
+   specific semantic region of CLIP space — the corpus composition determines what
+   "reachable" means.  For relative comparisons (layer sweep variance trajectory, tier
+   ordering within an experiment), it does not matter.  For absolute claims it does.
+
 ### LPIPS results (Exp 3 bar charts, both models)
 
 > **Scope:** Pythia-410m L23 and GPT-2 L11, all three alpha pairs (α=1 vs 1000, α=1 vs
