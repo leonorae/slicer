@@ -469,6 +469,113 @@ at least one additional model.
 
 ---
 
+## Observed results — Exp 1 & 3 (GPT-2 L11, Pythia-410m L23, 5000-sample corpus)
+
+> **Status:** Primary metric (CLIP cosine distance) computed. LPIPS and image analysis
+> not yet run. Results below are from the cosine distance and multicollinearity charts only.
+> Corpus quality is acknowledged as a limitation throughout — see caveat at end of section.
+
+### Alpha compression plateau (both models)
+
+The α=1000 vs α=10000 cosine distances are roughly 1/5th the α=1 vs α=10000 distances
+for every probe and both models.  Nearly all compression happens in the α=1 → α=1000 step;
+α=10000 adds little beyond α=1000.  The α=10000 condition is largely redundant for image
+generation purposes.  This is consistent with the erank plateau observed in the SVD analysis.
+
+### Collinearity results
+
+| Model | r(d_act, cosine_dist) | Interpretation |
+|---|---|---|
+| GPT-2 L11 | 0.998 | Driven entirely by one outlier (democracy, d_act ≈ 1100). Partial correlation is uninformative. |
+| Pythia-410m L23 | 0.700 | Below the 0.9 threshold. Partial correlation has some residual power. |
+
+### GPT-2 L11 — key findings
+
+- **Democracy is a pathological outlier.** d_act ≈ 1100 vs all other probes < 100 —
+  a >10× separation.  Its absolute cosine displacement (≈ 0.45) dominates the abstract tier
+  mean entirely.  This is not semantic unusualness; it is corpus-coverage absence.
+  "Democracy" does not appear in Flickr30k/CC3M (image-caption sources); the Ridge map
+  has no training signal for it and places its activation far from the corpus centroid.
+- **The abstract tier is incoherent for GPT-2.** With democracy as an outlier and only
+  ~3 probes per tier, the abstract mean and variance are unreliable.  The tier cannot be
+  interpreted as a category.
+- **After normalisation (ratio), the ordering is unusual > abstract > concrete** (CoV = 0.37,
+  above the 0.15 threshold).  Democracy's ratio (≈ 0.00041) is lower than the unusual tier
+  mean — meaning democracy is *less* compression-sensitive per unit corpus distance than the
+  unusual probes, despite its extreme absolute displacement.  The unusual tier being highest
+  in the ratio is the result that survives the confound.
+- **The r=0.998 line is not a genuine proportionality relationship.** Remove democracy and the
+  correlation would be near zero.  Do not interpret this as evidence that corpus distance
+  mechanistically explains compression sensitivity across the probe set.
+
+### Pythia-410m L23 — key findings
+
+- **d_act is nearly constant across all probes** (range 27.5–31.5, ≈ 4-unit spread across 11
+  probes).  For Pythia, the corpus-distance confound barely exists — all probes sit at
+  roughly equal distance from the corpus centroid in activation space.  Controlling for d_act
+  changes almost nothing.
+- **Ordering: unusual > abstract > concrete** in raw cosine distance and in ratio (CoV = 0.16,
+  marginally above the 0.15 threshold).
+- **The narrow d_act range makes Pythia the cleaner test of the hypothesis.** The variation in
+  cosine distance across probes is not explained by variation in corpus distance (because there
+  is almost no variation in corpus distance).  The unusual tier having higher cosine displacement
+  than concrete is therefore attributable to something other than corpus peripherality.
+- **"entropy" (abstract) and "the color of Tuesday" (unusual) are both near the top of the
+  cosine distance distribution**, with "a tree" and "a house" at the bottom.  This is
+  qualitatively consistent with the tier hypothesis but the within-tier variance is large
+  relative to the between-tier differences.
+
+### Cross-model summary
+
+| Finding | GPT-2 L11 | Pythia-410m L23 |
+|---|---|---|
+| Compression plateau at α ≈ 1000 | Yes | Yes |
+| r(d_act, cosine_dist) | 0.998 (outlier-driven) | 0.700 |
+| d_act range across probes | 20–1100 (heterogeneous) | 27.5–31.5 (homogeneous) |
+| Ratio ordering | unusual > abstract > concrete | unusual > abstract > concrete |
+| Ratio CoV | 0.37 | 0.16 |
+| Dominant confound | Democracy outlier (corpus absence) | Weak — d_act nearly constant |
+| Abstract tier reliability | Low (incoherent due to outlier) | Moderate |
+
+**The one consistent finding:** unusual > concrete in the compression ratio holds across both
+models and is not explainable by d_act alone in either case.  The abstract tier is noisy in
+both models (incoherent in GPT-2; moderate variance in Pythia).
+
+**What is NOT confirmed:** the full unusual > abstract > concrete tier ordering is not
+established with sufficient reliability for either model at current probe n and corpus size.
+
+### Corpus quality caveat
+
+The 5000-sample corpus draws heavily from image-caption sources (Flickr30k, CC3M).  Probes
+with no visual referent — "democracy", "justice", and to some extent all abstract/unusual
+tier probes — are structurally underrepresented.  This means:
+
+- d_act for abstract/unusual probes reflects **corpus composition**, not semantic properties
+  of the probes.  Democracy's extreme d_act (≈ 1100) is a corpus artifact, not a finding
+  about GPT-2's representation of political concepts.
+- The tier classification conflates "semantically unusual" with "corpus-peripheral".  For
+  Pythia this conflation is less severe (narrow d_act range), but the underlying cause is
+  unclear — it may reflect Pythia's pretraining on The Pile (broader coverage) rather than
+  a genuine geometric property.
+- **None of these results should be considered publication-ready.** The probe set is small
+  (≈ 3 per tier), the corpus is thin for non-visual concepts, and the between-tier differences
+  are small relative to within-tier variance.  The current runs are exploratory and diagnostic.
+
+### Open questions for Exp 1 before moving on
+
+- **LPIPS vs. cosine distance scatter** — not yet run.  Required to determine whether
+  CFG=7.5 amplifies these cosine distances above the visual detection threshold.  If
+  r(LPIPS, cosine_dist) ≈ 0, the images are prior noise and should not be examined.
+- **Layer sweep for compression sensitivity** — all current results are last-layer only.
+  Whether compression sensitivity (ratio) increases with layer depth (consistent with the
+  erank trajectory) is unexamined.  Would require running generate across all layers, which
+  is not in the current Exp 1 config.
+- **Democracy as a control probe** — its d_act ≈ 1100 makes it useful as a high-corpus-distance
+  control, but it should not be analysed as a representative abstract probe.  Either exclude
+  it from the abstract tier or add it to a separate "corpus-absent" category with d_act > 500.
+
+---
+
 ## Planned experiments
 
 Three experiments in priority order, each with a config file ready to run.
