@@ -642,6 +642,115 @@ python run_experiment.py --config experiment_config_exp2_pythia.json --phase gri
 
 ---
 
+## Observed results — Exp 2 visual analysis (Pythia-410m, 5 seeds per condition)
+
+> **Scope note:** All visual findings in this section are from **Pythia-410m only**.
+> None have been replicated on GPT-2 or any other model. GPT-2 Exp 2 was not run
+> (L0 rank-deficiency at low alpha makes it unsuitable). Do not generalise.
+
+> **Seed counts:** 5 seeds shown per condition. Full dataset is 16 seeds per
+> (probe × alpha). Conclusions below are provisional pending full-set confirmation.
+
+### L2 is an inter-seed convergence point at alpha=1
+
+Across two probes ("a cat", "the color of Tuesday"), L2 shows tighter cross-seed
+agreement than adjacent layers. For "the color of Tuesday" L2 alpha=1, all 5 seeds
+produced nearly identical warm amber diagonal wave/weave textures — the strongest
+single-layer convergence observed in any condition. For "a cat" L2 alpha=1, seeds
+converged on a loose grey/white vertical-flow family (weaker but still the tightest
+within that probe's layer sweep). Convergence at L2 is probe-specific (different
+textures for different probes, not all collapsing to the same point). L1 and L3 are
+more variable in both cases. This is not predicted by the erank trajectory and has no
+current geometric explanation.
+
+### The L0→L1 transition is probe-dependent
+
+For "beauty" alpha=1 (from Exp 2 grid, single seed): L0 was near-blank; L1 introduced
+dramatic high-contrast snake-scale structure. The token embedding alone contributed
+almost no visual information; the first transformer layer inserted structure entirely.
+
+For "a cat" alpha=1: L0 already had structured fragmented content. L1 changed its
+character but did not amplify it from near-zero. The embedding layer for a common
+concrete token has a non-trivial projection; the embedding layer for an abstract token
+may not.
+
+This difference is consistent with the hypothesis that common tokens have well-defined
+embedding-space projections into CLIP space, while abstract tokens begin near the
+corpus centroid and acquire visual identity only after transformer computation.
+**Caveat:** single-seed observations from the Exp 2 grid; not confirmed at seed level.
+
+### Compression stabilises unusual probes more than concrete probes at L23
+
+"The color of Tuesday" L23 alpha=1: bimodal (yellow/purple geometric maze OR
+black/sandy blobs — two coherent attractor groups across 5 seeds).
+"The color of Tuesday" L23 alpha=1000: unimodal (all 5 seeds → same horizontal amber
+banded pattern). Compression resolved the bimodal split.
+
+"A cat" L23 alpha=1: five distinct visual types, no clustering — genuinely high
+variance with no dominant attractor.
+"A cat" L23 alpha=1000: still five distinct visual types — compression did not resolve
+cat's L23 variability.
+
+**Interpretation:** Compression moves projections toward the corpus centroid, which maps
+to a well-defined SD attractor (warm amber brickwork/architecture). Unusual probes sit
+far from the centroid and are pushed toward it, gaining coherence. Concrete probes
+("a cat") may sit in a broad, diverse region of CLIP space where even the corpus
+centroid maps to a high-entropy SD neighbourhood — many plausible image types remain
+after compression. The concrete probe does not gain visual coherence from compression
+because its compressed destination is itself ambiguous to SD.
+
+**Important caveat:** this is the opposite of what the Exp 3 hypothesis predicted
+(concrete probes should be alpha-*insensitive*, not alpha-incoherent). The finding
+is about seed variance, not cosine distance. High seed variance at alpha=1000 is not
+the same as high cosine distance between alpha=1 and alpha=1000.
+
+### Two qualitatively different compression failure modes (GPT-2 observation)
+
+From GPT-2 Exp 3 results: "democracy" (d_act ≈ 1100) produces images visually
+indistinguishable from SD null noise (no-prompt / nonsense-prompt output). Other
+probes with moderate d_act produce recognisable corpus-like textures under compression.
+
+This identifies two failure modes:
+1. **Ordinary compression** (moderate d_act): W·(act − μ) shrinks; output → bias b →
+   corpus centroid → recognisable corpus-like textures (warm amber, fur, landscape).
+2. **Projection collapse** (extreme d_act, e.g. democracy): the Ridge map has zero
+   training signal for this activation region; even the bias term b is unreliable;
+   output → near-zero CLIP conditioning → SD prior noise.
+
+The threshold between these modes defines the effective coverage radius of the Ridge
+projection. It is estimable from GPT-2 data by ordering probes by d_act and finding
+where output transitions from "corpus texture" to "prior noise." Democracy at d_act ≈
+1100 is in the collapse regime; all other current probes appear to be in the ordinary
+compression regime.
+
+**Consequence for Exp 3:** The GPT-2 abstract tier mixes both failure modes ("beauty"
+→ ordinary compression, "democracy" → projection collapse). The tier is incoherent
+not only because n is small but because it contains qualitatively different projection
+behaviours. Democracy should be treated as a high-d_act diagnostic control, not an
+abstract-concept probe.
+
+### Limitations of current Exp 2 visual results — to fix in layer sweep design
+
+The following limitations apply to all visual findings above. A planned layer sweep
+experiment should address them:
+
+| Limitation | Effect | Fix |
+|---|---|---|
+| Only 5 of 16 seeds shown | Convergence/divergence conclusions are provisional | Run full 16-seed analysis; compute mean_pixel_var from manifest |
+| Only L0, L1, L2, L3, L23 sampled | L2 convergence peak is inferred, not traced | Sweep all 24 layers to find the actual variance minimum |
+| Only two probes compared ("a cat", "the color of Tuesday") | Cross-probe conclusions have n=2 | Add remaining Exp 3 probes to the layer sweep |
+| Single alpha per condition for cross-alpha comparison | Compression effect at intermediate layers uncharacterised | Run alpha=1 and alpha=1000 for all layers, not just last layer |
+| No quantitative seed variance metric used | Visual judgement of coherence is subjective | Use `mean_pixel_var` from manifest to find convergence layer objectively |
+| Pythia only | No cross-model confirmation | Replicate on GPT-2 once L0 rank issue is handled (use alpha ≥ 100 for L0) |
+| Exp 2 grid images (single seed) used alongside seed-stack images | Single-seed observations mixed with multi-seed observations | Separate claims made from single-seed vs. multi-seed data |
+
+**The key open question the layer sweep addresses:** Is L2 convergence a genuine local
+minimum in seed variance, and does it hold across all probes? The current data shows
+it for two probes but cannot determine whether it is a property of Pythia's early-layer
+geometry or an artefact of the specific probes chosen.
+
+---
+
 ### Exp 3 — Alpha sensitivity as novelty detector
 
 **Goal:** Test whether alpha sensitivity correlates with prompt unusualness.
