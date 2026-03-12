@@ -471,8 +471,8 @@ at least one additional model.
 
 ## Observed results — Exp 1 & 3 (GPT-2 L11, Pythia-410m L23, 5000-sample corpus)
 
-> **Status:** Primary metric (CLIP cosine distance) computed. LPIPS and image analysis
-> not yet run. Results below are from the cosine distance and multicollinearity charts only.
+> **Status:** Primary metric (CLIP cosine distance) computed. LPIPS now run (Exp 3
+> bar charts). Both confirm the CFG sensitivity floor failure mode — see LPIPS section below.
 > Corpus quality is acknowledged as a limitation throughout — see caveat at end of section.
 
 ### Alpha compression plateau (both models)
@@ -561,11 +561,49 @@ tier probes — are structurally underrepresented.  This means:
   (≈ 3 per tier), the corpus is thin for non-visual concepts, and the between-tier differences
   are small relative to within-tier variance.  The current runs are exploratory and diagnostic.
 
+### LPIPS results (Exp 3 bar charts, both models)
+
+> **Scope:** Pythia-410m L23 and GPT-2 L11, all three alpha pairs (α=1 vs 1000, α=1 vs
+> 10000, α=1000 vs 10000), tiers: concrete / abstract / unusual.
+
+**Main finding: LPIPS is flat across all tiers and both models.**
+
+All six panels cluster between **0.40–0.55 LPIPS** with heavily overlapping within-tier
+error bars (n≈3 per tier). The predicted ordering (unusual > abstract > concrete) is not
+confirmed in any panel.
+
+**The abstract tier is the lowest, not the middle, in most panels.** This is the
+democracy-outlier / projection-collapse effect: democracy is in the collapse regime
+(d_act ≈ 1100, output → SD prior noise), and prior noise looks similar *across* alpha
+values — producing low LPIPS, not high. The tier is incoherent.
+
+**The α=1000 vs α=10000 column is no smaller than the α=1 vs α=1000 column.**
+The compression plateau that was clear in CLIP cosine distance (~5× smaller) is
+invisible in LPIPS. LPIPS is too noisy to resolve the signal.
+
+**Interpretation: LPIPS is measuring diffusion prior noise, not conditioning signal.**
+These cosine distances are below the CFG=7.5 sensitivity floor (threshold δ from the
+confounder analysis).  CFG=7.5 cannot amplify the CLIP-vector differences into the
+perceptual regime — the images generated at α=1 and α=1000 differ by prior noise alone.
+This is exactly the failure mode predicted before the images were run.
+
+**Consequence for the metric hierarchy:**
+- CLIP cosine distance (primary metric) — valid.  Shows compression plateau, shows
+  unusual > concrete in the normalised ratio for Pythia.
+- LPIPS (secondary) — **not valid as evidence here**.  r(LPIPS, cosine_dist) is
+  effectively zero; the scatter is flat.  Images cannot be used to confirm or deny
+  the tier hypothesis at CFG=7.5.
+- Images — illustrative only; do not examine as primary evidence.
+
+**What would fix this:** sweep CFG (e.g. 3, 7.5, 15, 30) to find the threshold δ above
+which CLIP cosine distances of this magnitude become perceptually visible.  Alternatively,
+compute LPIPS on the extreme-alpha pairs at the layer sweep level once those images exist
+— earlier layers may produce larger cosine displacements that exceed δ.
+
 ### Open questions for Exp 1 before moving on
 
-- **LPIPS vs. cosine distance scatter** — not yet run.  Required to determine whether
-  CFG=7.5 amplifies these cosine distances above the visual detection threshold.  If
-  r(LPIPS, cosine_dist) ≈ 0, the images are prior noise and should not be examined.
+- **LPIPS vs. cosine distance scatter** — not yet run (LPIPS computed, but scatter plot
+  against per-probe cosine distance still needed to confirm r ≈ 0 formally).
 - **Layer sweep for compression sensitivity** — all current results are last-layer only.
   Whether compression sensitivity (ratio) increases with layer depth (consistent with the
   erank trajectory) is unexamined.  Would require running generate across all layers, which
@@ -573,6 +611,8 @@ tier probes — are structurally underrepresented.  This means:
 - **Democracy as a control probe** — its d_act ≈ 1100 makes it useful as a high-corpus-distance
   control, but it should not be analysed as a representative abstract probe.  Either exclude
   it from the abstract tier or add it to a separate "corpus-absent" category with d_act > 500.
+- **CFG sweep** — required to establish δ.  Without it, LPIPS cannot be used as secondary
+  confirmation for any of the three experiments.
 
 ---
 
