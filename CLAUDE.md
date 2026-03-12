@@ -287,7 +287,7 @@ the semantic signal from the corpus-coverage signal without an independent measu
 | **Prompt length** | **Moderate (Exp 3)** | Unusual tier probes are systematically longer ("the feeling of almost remembering" = 7 tokens vs "a cat" = 3). Last-token activation depends on context length. Controlled by `n_tokens` in `probe_text_stats`. |
 | **LLM pretraining corpus distance** | **Moderate (cross-model)** | GPT-2 and Pythia assign different perplexities to the same probe reflecting WebText vs Pile coverage differences. Controlled by `perplexity` in `probe_text_stats`. |
 | **Diffusion prior variance** | **Moderate (all LPIPS)** | Some LPIPS signal between alpha=1 and alpha=1000 images could reflect different amounts of diffusion-prior noise rather than genuine CLIP-vector differences. Controlled by `seed_variance` in manifest: compare variance at alpha=1 vs alpha=1000 for the same probe. |
-| **CFG scale** | **Fixed parameter** | CFG=7.5 is held constant. CFG acts as a gain on the conditioning signal — high CFG amplifies CLIP vector differences, low CFG adds prior noise. Not a confound for within-experiment comparisons (same CFG for all alpha values), but limits generalisability of absolute LPIPS values to other CFG settings. |
+| **CFG scale** | **Fixed parameter** | CFG=7.5 is held constant in Exp 1–3. **Updated standard: CFG=25 for Exp 4+.** Rationale: at CFG=7.5 Pythia's highest probes (cosine_dist ≈ 0.07) sit only 0.09 LPIPS above the noise floor (~0.43); amplification math [claude, 2026-03-12] estimates CFG≈14 as the minimum to reach LPIPS=0.60, CFG=25 gives comfortable margin. Hypothesised ceiling around CFG=30–40 where SD images become fully saturated and LPIPS measures saturation artefacts rather than conditioning content [claude, 2026-03-12]. CFG acts as a gain on the conditioning signal — high CFG amplifies CLIP vector differences, low CFG adds prior noise. Not a confound for within-experiment comparisons (same CFG for all alpha values), but limits generalisability of absolute LPIPS values to other CFG settings. |
 | **nn_recall@5 as proxy for probe discriminability** | **Proxy validity** | nn_recall is computed on corpus validation data; it does not predict behaviour on out-of-distribution probes |
 | **Cross-model LPIPS comparison** | **Moderate** | GPT-2 and Pythia-410m have different pretraining corpora; the same probe text may sit at different distances from each model's internal distribution |
 | **SVD metrics (erank, condition_number, n_visible)** | **None** | Computed on the projection matrix W alone; probe texts are not involved |
@@ -648,8 +648,7 @@ The Pythia unusual probes are approaching but not clearly above the floor.
 - **Democracy as a control probe** — its d_act ≈ 1100 makes it useful as a high-corpus-distance
   control, but it should not be analysed as a representative abstract probe.  Either exclude
   it from the abstract tier or add it to a separate "corpus-absent" category with d_act > 500.
-- **CFG sweep** — required to establish δ.  Without it, LPIPS cannot be used as secondary
-  confirmation for any of the three experiments.
+- **CFG sweep** — superseded. CFG raised to 25 for Exp 4+ rather than running a full sweep. Amplification math [claude, 2026-03-12] indicates CFG=25 should push Pythia's highest probes (cosine_dist ≈ 0.07) clearly above the LPIPS floor; democracy at d_act≈1100 serves as calibration that the method is working. A sweep (3, 7.5, 15, 25, 30) could still characterise δ precisely but is deferred as lower priority than the layer sweep.
 
 ---
 
@@ -868,3 +867,62 @@ python run_experiment.py --config experiment_config_exp3_gpt2.json --phase grids
 python run_experiment.py --config experiment_config_exp3_pythia.json --phase generate
 python run_experiment.py --config experiment_config_exp3_pythia.json --phase grids
 ```
+
+---
+
+### Exp 4 — Full layer sweep (Pythia-410m, seed variance trajectory)
+
+**Goal:** Find where in Pythia's layer hierarchy seed variance is minimised (the
+convergence layer), and whether L2 as a local minimum holds across the full probe set.
+Secondarily, produce per-layer activation cache for all probes to enable direct
+comparison with upcoming novel projection metrics.
+
+**Background:** Exp 2 visual analysis (2 probes, 5 seeds, L0–L3 + L23 only) suggested
+L2 as an inter-seed convergence point.  That observation is unconfirmed: only two probes,
+only 5 seeds shown, only 5 of 24 layers sampled.
+
+**Model: Pythia-410m only.**  GPT-2 L0 is rank-deficient at alpha=1 (unusable without
+complicating the sweep with alpha≥100 for that layer).  Pythia has 24 layers (richer
+trajectory), homogeneous d_act across probes (corpus-distance confound is weak), and
+is the target model for upcoming novel projection metrics work.
+
+**Design:**
+- Model: `EleutherAI/pythia-410m`
+- Layers: all 24 (L0–L23)
+- Alpha: 1 only [alpha=1000 deferred; doubles compute; cross-alpha question partially
+  answered at L23 by Exp 1/3; add if signal is found]
+- CFG: 25 (new standard; see CFG scale row in confounder table)
+- Seeds: 16 (consistent with Exp 1/3; needed for reliable `mean_pixel_var`)
+- Probes: full Exp 3 set (all 9: concrete + abstract + unusual tiers)
+  — democracy included as high-d_act control; treated separately, not as abstract-tier member
+- Corpus: 5000-sample, same sources as Exp 1/3 (comparability with prior per-layer SVD
+  results and Exp 3 compression ratios; convergence layer is more a network-structure
+  property than corpus-dependent)
+- track_lpips: False (seed variance is the primary output; LPIPS too noisy)
+
+**Primary metric:** `manifest["seed_variance"][key]["mean_pixel_var"]` per (probe, layer).
+Plot: layer (x) vs. mean_pixel_var (y), one line per probe.  Find the layer of minimum
+variance and whether it is consistent across probes.
+
+**Secondary:** `manifest["probe_clip_vectors"]` per (probe, layer) — enables cosine
+distance between adjacent layers (layer-to-layer CLIP drift) and comparison with novel
+projection metrics on the same axis.
+
+**Coordination with novel projection metrics:** The `generate` phase populates
+`.probe_cache/{slug}/layer_{N}.npy` for all 24 layers and all 9 probes.  Novel
+projection methods should read from this cache (same slugs, same layer indices) to
+avoid re-running the LLM.  The `probe_clip_vectors` stored in `manifest` serve as
+a Ridge-projection baseline for direct comparison against whatever new metric produces.
+
+**Config:** `experiment_config_exp4_pythia_layersweep.json`
+**Commands:**
+```bash
+python run_experiment.py --config experiment_config_exp4_pythia_layersweep.json --phase train
+python run_experiment.py --config experiment_config_exp4_pythia_layersweep.json --phase generate
+python run_experiment.py --config experiment_config_exp4_pythia_layersweep.json --phase grids
+```
+
+**Key question:** Is L2 a genuine local minimum in mean_pixel_var across all probes,
+or was it an artefact of the two probes in Exp 2?  A consistent minimum at L2 across
+concrete, abstract, and unusual tiers would be a strong signal; probe-specific minima
+at different layers would suggest the convergence point is semantics-dependent.
