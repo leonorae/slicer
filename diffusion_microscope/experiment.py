@@ -742,6 +742,90 @@ class ExperimentRunner:
     # Phase: analyze  (Phase 0)
     # ------------------------------------------------------------------
 
+    def _analyze_seed_variance(self, plt) -> None:
+        """
+        Read seed_variance from manifest and produce:
+          analysis/seed_variance_{proj_key}_CFG{v}.png  – mean_pixel_var vs. layer,
+              one line per probe.  The layer of minimum variance for each probe is
+              the *convergence layer* — where the CLIP conditioning vector most
+              tightly constrains the diffusion output.
+          analysis/convergence_summary.json             – convergence layer per
+              (proj_key, CFG, probe slug) as a machine-readable record.
+
+        Key format in manifest["seed_variance"]:
+            "{proj_key}/{text_slug}/L{layer_idx:04d}/CFG{cfg:g}"
+        """
+        sv = self.manifest.get("seed_variance", {})
+        if not sv:
+            print("  [seed_variance] No data in manifest — skipping.")
+            return
+
+        from collections import defaultdict
+
+        # Group: (proj_key, cfg) -> slug -> {layer_idx: mean_pixel_var}
+        groups: Dict = defaultdict(lambda: defaultdict(dict))
+        for key, rec in sv.items():
+            parts = key.split("/")
+            if len(parts) < 4:
+                continue
+            # Parse from the right: last=CFG{v}, second-last=L{NNNN}, third-last=slug
+            cfg_str, layer_str, slug = parts[-1], parts[-2], parts[-3]
+            proj_key = "/".join(parts[:-3])
+            if not cfg_str.startswith("CFG") or not layer_str.startswith("L"):
+                continue
+            mean_var = rec.get("mean_pixel_var")
+            if mean_var is None:
+                continue
+            cfg = float(cfg_str[3:])
+            layer_idx = int(layer_str[1:])
+            groups[(proj_key, cfg)][slug][layer_idx] = mean_var
+
+        if not groups:
+            return
+
+        convergence_summary: Dict = {}
+
+        for (proj_key, cfg), slug_data in sorted(groups.items()):
+            # Only plot slugs that have data across ≥ 3 layers
+            slug_data = {s: d for s, d in slug_data.items() if len(d) >= 3}
+            if not slug_data:
+                continue
+
+            fig, ax = plt.subplots(figsize=(10, 5))
+            proj_cfg_summary: Dict = {}
+
+            for slug, layer_vars in sorted(slug_data.items()):
+                xs = sorted(layer_vars.keys())
+                ys = [layer_vars[x] for x in xs]
+                ax.plot(xs, ys, marker="o", markersize=4, linewidth=1.5, label=slug)
+                conv_layer = xs[int(np.argmin(ys))]
+                proj_cfg_summary[slug] = {
+                    "convergence_layer": conv_layer,
+                    "min_pixel_var": float(min(ys)),
+                    "max_pixel_var": float(max(ys)),
+                    "n_layers": len(xs),
+                }
+
+            ax.set_xlabel("Layer index")
+            ax.set_ylabel("Mean pixel variance (across seeds)")
+            ax.set_title(f"Seed Variance vs. Layer — {proj_key} | CFG={cfg:g}")
+            ax.legend(fontsize=8, loc="upper right")
+            ax.grid(True, alpha=0.3)
+            fig.tight_layout()
+
+            safe_key = proj_key.replace("/", "_")
+            plot_path = self.analysis_dir / f"seed_variance_{safe_key}_CFG{cfg:g}.png"
+            fig.savefig(str(plot_path), dpi=150)
+            plt.close(fig)
+            print(f"  Saved: {plot_path}")
+
+            convergence_summary.setdefault(proj_key, {})[f"CFG{cfg:g}"] = proj_cfg_summary
+
+        conv_path = self.analysis_dir / "convergence_summary.json"
+        with open(conv_path, "w") as f:
+            json.dump(convergence_summary, f, indent=2)
+        print(f"  Saved: {conv_path}")
+
     def run_analyze(self) -> None:
         """
         Read SVD data from the manifest and stored S.npy files; produce:
@@ -889,6 +973,9 @@ class ExperimentRunner:
         with open(summary_path, "w") as f:
             json.dump(summary, f, indent=2)
         print(f"  Saved: {summary_path}")
+
+        # --- Seed variance trajectories + convergence layer ---
+        self._analyze_seed_variance(plt)
         print("Analyze phase complete.")
 
     # ------------------------------------------------------------------

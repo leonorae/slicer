@@ -133,6 +133,7 @@ experiment_results/
 | `grids` | Compose layer × CFG grid PNGs |
 | `metrics` | Post-hoc LPIPS + image variance |
 | `animations` | Layer-sweep GIFs per (proj, text, CFG, seed) |
+| `analyze` | SVD analysis (erank, spectra) + **seed variance trajectories** → `analysis/erank_vs_layer.png`, `analysis/seed_variance_{proj}_CFG{v}.png`, `analysis/convergence_summary.json` |
 | `dashboard` | Write `dashboard.html` |
 
 All phases are idempotent — re-running skips completed work via `manifest.json`.
@@ -328,6 +329,19 @@ All four metric groups below are computed automatically during the `generate` ph
   Computed when ≥ 4 seed images exist for the group.
 
 - **`n_seeds`** — number of seed images that contributed to the variance estimate.
+
+**Convergence layer** — the layer index where `mean_pixel_var` is minimised for a given
+(proj_key, probe, CFG).  At this layer the CLIP conditioning vector most tightly
+constrains the diffusion output: different seeds converge to similar images.  The
+`analyze` phase reads all `seed_variance` entries and produces:
+- `analysis/seed_variance_{proj_key}_CFG{v}.png` — layer vs. mean_pixel_var, one line
+  per probe slug; the minimum of each line is the convergence layer for that probe.
+- `analysis/convergence_summary.json` — machine-readable table of convergence layer,
+  min/max pixel var, and n_layers per (proj_key, CFG, slug).
+
+Exp 4 uses this as its primary output: plot `mean_pixel_var` vs. layer across all 9
+probes to determine whether the L2 local minimum observed in Exp 2 (2 probes, 5 seeds)
+generalises.
 
 These metrics let you:
 - Test whether LPIPS differences within Exp 3 survive after controlling for `d_act`
