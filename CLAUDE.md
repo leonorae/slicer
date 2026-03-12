@@ -600,10 +600,47 @@ which CLIP cosine distances of this magnitude become perceptually visible.  Alte
 compute LPIPS on the extreme-alpha pairs at the layer sweep level once those images exist
 — earlier layers may produce larger cosine displacements that exceed δ.
 
+### LPIPS vs. cosine distance scatter (sensitivity floor characterisation)
+
+**GPT-2 L11 (r=0.93): single-point artefact.**
+Every probe except democracy clusters at cosine_dist < 0.1, LPIPS 0.38–0.50 — a flat
+cloud.  Democracy sits at cosine_dist ≈ 0.45, LPIPS ≈ 0.61, dragging r to 0.93.  Remove
+democracy and the correlation is near zero.  r=0.93 is *not* evidence that LPIPS reliably
+tracks cosine distance: democracy's extreme outlier status is doing all the work.
+Crucially, democracy *does* produce elevated LPIPS — the method is not broken, but the
+sensitivity threshold δ is somewhere above cosine_dist ≈ 0.1, and all other probes are
+far below it.
+
+**Pythia L23 (r=0.49): weak genuine correlation, one anomaly.**
+Probes spread across 0.02–0.075 cosine distance (consistent with homogeneous d_act).
+r=0.49 means LPIPS does partially track cosine distance for Pythia.  The unusual probes
+at the far right ("the color of Tuesday", "entropy at midnight") have both the highest
+cosine distances and the highest LPIPS (~0.52–0.53).  However, "the feeling of almost
+remembering" sits anomalously low — moderate cosine distance but the lowest LPIPS among
+unusual probes (~0.38).  This probe's CLIP vector moves in a direction SD does not
+differentiate perceptually, even though the geometric shift is real.
+
+**Sensitivity floor estimate (both models):**
+LPIPS ~0.40–0.43 is the empirical floor — below this, diffusion prior noise dominates.
+Even at Pythia's maximum cosine_dist ≈ 0.07, LPIPS only reaches ~0.53.  The δ threshold
+appears to require cosine_dist ≳ 0.1–0.3 at CFG=7.5.  This is achieved only by extreme
+d_act probes (democracy at 0.45) or by running at earlier layers with larger displacements.
+The Pythia unusual probes are approaching but not clearly above the floor.
+
+**What the scatter resolves:**
+- **r(LPIPS, cosine_dist) for GPT-2 is outlier-driven; for Pythia it is weak (0.49).**
+  Neither constitutes validation of LPIPS as a reliable secondary metric for these probes.
+- **Direction of CLIP movement matters, not just magnitude.**  "The feeling of almost
+  remembering" has real cosine displacement but low LPIPS — its compression shift is
+  orthogonal to SD's perceptually sensitive axes.  Cosine distance is necessary but not
+  sufficient to predict perceptual change.
+- **δ estimate constrains the CFG sweep design.**  To confirm the tier ordering visually,
+  either raise CFG until Pythia's 0.07 displacements exceed δ, or augment the probe set
+  with higher d_act probes in the ordinary-compression regime (not collapse like democracy).
+
 ### Open questions for Exp 1 before moving on
 
-- **LPIPS vs. cosine distance scatter** — not yet run (LPIPS computed, but scatter plot
-  against per-probe cosine distance still needed to confirm r ≈ 0 formally).
+- **LPIPS vs. cosine distance scatter** — now run; see section above.
 - **Layer sweep for compression sensitivity** — all current results are last-layer only.
   Whether compression sensitivity (ratio) increases with layer depth (consistent with the
   erank trajectory) is unexamined.  Would require running generate across all layers, which
