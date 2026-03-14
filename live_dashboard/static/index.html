@@ -1,0 +1,1066 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Diffusion Microscope</title>
+<style>
+:root {
+  --bg:     #0d1117; --bg2: #161b22; --bg3: #21262d;
+  --border: #30363d; --text: #c9d1d9; --dim: #8b949e;
+  --accent: #58a6ff; --green: #3fb950; --orange: #d29922; --red: #f85149;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg); color: var(--text);
+  font-family: ui-monospace, "Cascadia Code", monospace; font-size: 13px;
+  height: 100vh; overflow: hidden; display: flex; flex-direction: column;
+}
+/* ── Header ── */
+header {
+  background: var(--bg2); border-bottom: 1px solid var(--border);
+  padding: 7px 14px; display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+}
+.logo { font-size: 14px; font-weight: 600; color: var(--text); letter-spacing: .5px; }
+.logo span { color: var(--accent); }
+nav { display: flex; gap: 3px; }
+nav button {
+  background: transparent; border: 1px solid var(--border);
+  color: var(--dim); padding: 4px 14px; border-radius: 6px;
+  cursor: pointer; font: inherit; font-size: 12px; transition: all .15s;
+}
+nav button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+nav button:hover:not(.active) { border-color: var(--accent); color: var(--accent); }
+#hdr-status { margin-left: auto; color: var(--dim); font-size: 11px; max-width: 400px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ── Panels ── */
+.panel { display: flex; flex: 1; overflow: hidden; }
+
+/* ── Sidebar ── */
+.sidebar {
+  width: 230px; min-width: 230px; background: var(--bg2);
+  border-right: 1px solid var(--border); overflow-y: auto;
+  padding: 10px; display: flex; flex-direction: column; gap: 10px;
+}
+.cg { display: flex; flex-direction: column; gap: 4px; }
+.cg label { color: var(--dim); font-size: 11px; }
+.cg input, .cg select, .cg textarea {
+  width: 100%; background: var(--bg3); border: 1px solid var(--border);
+  color: var(--text); padding: 5px 7px; border-radius: 4px;
+  font: inherit; font-size: 12px; outline: none;
+}
+.cg input:focus, .cg select:focus, .cg textarea:focus { border-color: var(--accent); }
+.cg textarea { resize: vertical; min-height: 56px; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.btn-row { display: flex; gap: 3px; flex-wrap: wrap; }
+.btn-row button, .cg button {
+  flex: 1; background: var(--bg3); border: 1px solid var(--border);
+  color: var(--text); padding: 4px 8px; border-radius: 4px;
+  cursor: pointer; font: inherit; font-size: 11px; transition: all .12s;
+}
+.btn-row button:hover, .cg button:hover { border-color: var(--accent); color: var(--accent); }
+.btn-row button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.load-btn {
+  background: var(--bg3); border: 1px solid var(--border);
+  color: var(--text); padding: 5px 10px; border-radius: 4px;
+  cursor: pointer; font: inherit; font-size: 12px; white-space: nowrap;
+}
+.load-btn:hover { border-color: var(--accent); color: var(--accent); }
+.gen-btn {
+  width: 100%; background: var(--accent); border: none; color: #fff;
+  padding: 8px; border-radius: 4px; cursor: pointer; font: inherit;
+  font-size: 13px; font-weight: 600; transition: background .15s;
+}
+.gen-btn:hover { background: #79b8ff; }
+.gen-btn:disabled { opacity: .45; cursor: not-allowed; }
+.sep { border-top: 1px solid var(--border); }
+
+/* ── Layer metadata sidebar panel ── */
+#layer-meta { border-top: 1px solid var(--border); padding-top: 8px; }
+#layer-meta h4 { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 5px; }
+.mtable { width: 100%; border-collapse: collapse; font-size: 11px; }
+.mtable th { color: var(--dim); text-align: left; font-weight: normal; padding: 2px 4px 2px 0; font-size: 10px; }
+.mtable td { padding: 2px 4px; }
+.mtable td.val { text-align: right; color: var(--accent); font-size: 11px; }
+.mtable tr.section-hdr td { color: var(--dim); font-size: 10px; padding-top: 5px; font-weight: 600; text-transform: uppercase; }
+
+/* ── Viewer area ── */
+.viewer { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+.view-panel { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+
+/* ── Layer nav bar ── */
+.lnav {
+  display: flex; align-items: center; gap: 5px;
+  padding: 5px 10px; background: var(--bg2); border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.lnav button {
+  background: var(--bg3); border: 1px solid var(--border);
+  color: var(--text); padding: 3px 9px; border-radius: 4px;
+  cursor: pointer; font: inherit; font-size: 13px;
+}
+.lnav button:hover { border-color: var(--accent); color: var(--accent); }
+#layer-counter, #cmp-counter { min-width: 80px; text-align: center; font-size: 12px; }
+.speed-wrap { display: flex; align-items: center; gap: 4px; margin-left: auto; color: var(--dim); font-size: 10px; }
+#play-speed { width: 55px; accent-color: var(--accent); }
+
+/* ── Main image container ── */
+.img-well {
+  flex: 1; overflow: hidden; display: flex; align-items: center;
+  justify-content: center; background: #000;
+}
+#main-img {
+  max-width: 100%; max-height: 100%; object-fit: contain;
+  image-rendering: pixelated;
+}
+
+/* ── Thumbnail strip ── */
+.strip-wrap {
+  height: 68px; overflow-x: auto; overflow-y: hidden;
+  background: var(--bg2); border-top: 1px solid var(--border); flex-shrink: 0;
+}
+#thumb-strip { display: flex; gap: 2px; padding: 3px; height: 100%; }
+.thumb {
+  width: 58px; height: 58px; object-fit: cover; flex-shrink: 0;
+  cursor: pointer; border: 2px solid transparent; border-radius: 3px;
+  image-rendering: pixelated; transition: border-color .1s;
+}
+.thumb.active { border-color: var(--accent); }
+.thumb:hover:not(.active) { border-color: var(--dim); }
+.thumb-ph {
+  width: 58px; height: 58px; flex-shrink: 0;
+  background: var(--bg3); border: 1px solid var(--border); border-radius: 3px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--dim); font-size: 10px;
+}
+
+/* ── Layer slider + caption ── */
+.layer-foot { background: var(--bg2); border-top: 1px solid var(--border); flex-shrink: 0; }
+#layer-slider, #cmp-slider {
+  width: 100%; padding: 5px 12px; accent-color: var(--accent); display: block; cursor: pointer;
+}
+.caption { padding: 2px 12px 5px; font-size: 11px; color: var(--dim); }
+
+/* ── Grid view ── */
+#view-grid { overflow-y: auto; padding: 10px; }
+.layer-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 5px;
+}
+.gcell {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 4px;
+  overflow: hidden; cursor: pointer; position: relative; transition: border-color .1s;
+}
+.gcell:hover { border-color: var(--accent); }
+.gcell img { width: 100%; display: block; image-rendering: pixelated; }
+.gcell.pending { display: flex; align-items: center; justify-content: center; min-height: 100px; }
+.glabel {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: rgba(0,0,0,.65); text-align: center;
+  font-size: 10px; padding: 2px; color: var(--text); pointer-events: none;
+}
+
+/* ── Compare view ── */
+#view-compare { display: flex; flex-direction: column; overflow: hidden; }
+.cmp-row { flex: 1; display: flex; gap: 8px; padding: 10px; overflow-x: auto; align-items: flex-start; }
+.ccell { min-width: 180px; max-width: 320px; flex-shrink: 0; }
+.ccell img { width: 100%; image-rendering: pixelated; border: 1px solid var(--border); border-radius: 3px; }
+.ccell .clabel { font-size: 11px; color: var(--dim); margin-bottom: 4px; word-break: break-all; }
+.ccell .missing { color: var(--dim); font-size: 11px; padding: 8px; text-align: center; border: 1px dashed var(--border); border-radius: 3px; }
+
+/* ── Metrics view ── */
+#view-metrics { overflow-y: auto; padding: 14px; }
+#view-metrics h3 { color: var(--text); margin: 14px 0 6px; font-size: 13px; }
+#view-metrics table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 14px; }
+#view-metrics th, #view-metrics td { border: 1px solid var(--border); padding: 4px 8px; }
+#view-metrics th { background: var(--bg2); color: var(--dim); font-weight: normal; }
+#view-metrics td.hi { color: var(--accent); }
+#view-metrics .good { color: var(--green); }
+#view-metrics .warn { color: var(--orange); }
+
+/* ── Live panel ── */
+#live { display: none; }
+#live-viewer { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+#live-hdr { font-size: 13px; color: var(--dim); }
+#live-grid { }  /* reuses .layer-grid */
+.prog-bg { background: var(--bg3); border-radius: 3px; height: 3px; margin-top: 5px; }
+.prog-bar { height: 3px; background: var(--accent); border-radius: 3px; transition: width .3s; width: 0; }
+#live-status { font-size: 11px; color: var(--dim); min-height: 14px; }
+
+/* ── Lightbox ── */
+#lightbox {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,.93); z-index: 200;
+  flex-direction: column; align-items: center; justify-content: center;
+}
+#lightbox.open { display: flex; }
+#lb-bar { position: absolute; top: 12px; left: 0; right: 0; display: flex; align-items: center; gap: 10px; padding: 0 16px; }
+#lb-bar button {
+  background: var(--bg3); border: 1px solid var(--border); color: var(--text);
+  padding: 5px 12px; border-radius: 4px; cursor: pointer; font: inherit;
+}
+#lb-caption { font-size: 12px; color: var(--dim); }
+#lb-img { max-width: 90vw; max-height: 88vh; image-rendering: pixelated; }
+
+/* ── Spinner ── */
+.spin { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: rot .7s linear infinite; display: inline-block; }
+@keyframes rot { to { transform: rotate(360deg); } }
+
+/* ── Scrollbars ── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--dim); }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="logo">🔬 Diffusion <span>Microscope</span></span>
+  <nav>
+    <button id="tab-browse" class="active" onclick="setMode('browse')">Browse</button>
+    <button id="tab-live"               onclick="setMode('live')">Live</button>
+  </nav>
+  <span id="hdr-status"></span>
+</header>
+
+<!-- ═══════════════════════════ BROWSE ═══════════════════════════ -->
+<div id="browse" class="panel">
+
+  <aside class="sidebar">
+    <div class="cg">
+      <label>Results directory</label>
+      <div style="display:flex;gap:4px">
+        <input id="br-dir" type="text" placeholder="/path/to/experiment_results">
+        <button class="load-btn" onclick="loadResults()">Load</button>
+      </div>
+    </div>
+
+    <div class="cg">
+      <label>Probe</label>
+      <select id="br-probe" onchange="onProbeChange()"></select>
+    </div>
+
+    <div class="cg">
+      <label>Projection / alpha</label>
+      <select id="br-proj" onchange="onProjChange()"></select>
+    </div>
+
+    <div class="row2">
+      <div class="cg">
+        <label>CFG</label>
+        <select id="br-cfg" onchange="onParamChange()"></select>
+      </div>
+      <div class="cg">
+        <label>Seed</label>
+        <select id="br-seed" onchange="onParamChange()"></select>
+      </div>
+    </div>
+
+    <div class="cg">
+      <label>View</label>
+      <div class="btn-row">
+        <button id="v-slide"   class="active" onclick="setView('slide')">Slideshow</button>
+        <button id="v-grid"               onclick="setView('grid')">Grid</button>
+        <button id="v-compare"            onclick="setView('compare')">Compare</button>
+        <button id="v-metrics"            onclick="setView('metrics')">Metrics</button>
+      </div>
+    </div>
+
+    <div class="sep"></div>
+
+    <!-- Per-layer metadata -->
+    <div id="layer-meta" style="display:none">
+      <h4>Layer info</h4>
+      <div id="meta-body"></div>
+    </div>
+  </aside>
+
+  <div class="viewer">
+
+    <!-- Slideshow -->
+    <div id="view-slide" class="view-panel">
+      <div class="lnav">
+        <button onclick="jumpLayerIdx(0)" title="First">⏮</button>
+        <button onclick="stepLayer(-1)"   title="Prev  ←">◀</button>
+        <span id="layer-counter">—</span>
+        <button onclick="stepLayer(1)"    title="Next  →">▶</button>
+        <button onclick="jumpLayerIdx(-1)"title="Last">⏭</button>
+        <button id="play-btn" onclick="togglePlay()" title="Play/Pause  Space">▶ Play</button>
+        <div class="speed-wrap">
+          <span>fps</span>
+          <input id="play-speed" type="range" min="1" max="10" value="3" title="Playback speed">
+        </div>
+      </div>
+      <div class="img-well">
+        <img id="main-img" src="" alt="" onclick="openLightbox(getCurrentRelPath(), 'L'+currentLayer())">
+      </div>
+      <div class="strip-wrap"><div id="thumb-strip"></div></div>
+      <div class="layer-foot">
+        <input id="layer-slider" type="range" min="0" max="0" value="0" oninput="onSlider(this.value)">
+        <div class="caption" id="slide-caption"></div>
+      </div>
+    </div>
+
+    <!-- Grid -->
+    <div id="view-grid" class="view-panel" style="display:none">
+      <div style="padding:6px 10px;background:var(--bg2);border-bottom:1px solid var(--border);font-size:11px;color:var(--dim)">
+        Click a cell to open in Slideshow. Keyboard: ← → navigate layers.
+      </div>
+      <div style="overflow-y:auto;flex:1;padding:10px">
+        <div id="grid-cells" class="layer-grid"></div>
+      </div>
+    </div>
+
+    <!-- Compare -->
+    <div id="view-compare" class="view-panel" style="display:none">
+      <div class="lnav">
+        <button onclick="stepLayer(-1)">◀</button>
+        <span id="cmp-counter">—</span>
+        <button onclick="stepLayer(1)">▶</button>
+        <span style="margin-left:8px;font-size:11px;color:var(--dim)">All projections · same layer · same CFG · same seed</span>
+      </div>
+      <div class="cmp-row" id="cmp-cells"></div>
+      <div class="layer-foot">
+        <input id="cmp-slider" type="range" min="0" max="0" value="0" oninput="onSlider(this.value)">
+      </div>
+    </div>
+
+    <!-- Metrics -->
+    <div id="view-metrics" class="view-panel" style="display:none">
+      <div id="metrics-body" style="padding:14px;overflow-y:auto;flex:1"></div>
+    </div>
+
+  </div><!-- .viewer -->
+</div><!-- #browse -->
+
+
+<!-- ═══════════════════════════ LIVE ════════════════════════════ -->
+<div id="live" class="panel">
+
+  <aside class="sidebar">
+    <div class="cg">
+      <label>Results dir (for projection)</label>
+      <div style="display:flex;gap:4px">
+        <input id="lv-dir" type="text" placeholder="/path/to/experiment_results">
+        <button class="load-btn" onclick="loadLiveResults()">Load</button>
+      </div>
+    </div>
+
+    <div class="cg">
+      <label>Projection</label>
+      <select id="lv-proj"></select>
+    </div>
+
+    <div class="cg">
+      <label>Probe text</label>
+      <textarea id="lv-text" placeholder="a cat on a roof"></textarea>
+    </div>
+
+    <div class="row2">
+      <div class="cg">
+        <label>CFG</label>
+        <input id="lv-cfg" type="number" value="25" min="0" max="100" step="0.5">
+      </div>
+      <div class="cg">
+        <label>Seed</label>
+        <input id="lv-seed" type="number" value="42" min="0">
+      </div>
+    </div>
+
+    <div class="cg">
+      <label>Inference steps</label>
+      <input id="lv-steps" type="number" value="30" min="1" max="100">
+    </div>
+
+    <div class="cg">
+      <label>Layers (comma-list or "all")</label>
+      <input id="lv-layers" type="text" value="all" placeholder="all  or  0,4,8,12,16,20,23">
+    </div>
+
+    <div class="cg">
+      <button class="gen-btn" id="gen-btn" onclick="startGenerate()">▶ Generate</button>
+    </div>
+
+    <div id="lv-prog" style="display:none">
+      <div id="lv-status" class="live-status"></div>
+      <div class="prog-bg"><div class="prog-bar" id="prog-bar"></div></div>
+    </div>
+    <div class="sep"></div>
+    <div style="font-size:10px;color:var(--dim);line-height:1.5">
+      LLM + SD are loaded once and cached in memory.
+      First run: model download + load may take minutes.
+      Subsequent runs reuse cached models.
+    </div>
+  </aside>
+
+  <div id="live-viewer">
+    <div id="live-hdr">No results yet — enter a probe text and click Generate.</div>
+    <div id="live-grid" class="layer-grid"></div>
+  </div>
+
+</div><!-- #live -->
+
+
+<!-- Lightbox -->
+<div id="lightbox">
+  <div id="lb-bar">
+    <button onclick="closeLightbox()">✕ Close</button>
+    <span id="lb-caption"></span>
+  </div>
+  <img id="lb-img" src="" alt="">
+</div>
+
+
+<script>
+// ══════════════════════════════════════════════════════════════════════
+//  State
+// ══════════════════════════════════════════════════════════════════════
+let manifest  = null;
+let imgIdx    = {};   // [proj][slug][layer_s][cfg_s][seed_s] = relPath
+
+const st = {
+  mode:   'browse',
+  view:   'slide',
+  dir:    '',
+  proj:   null,
+  probe:  null,
+  cfg:    null,
+  seed:   null,
+  layerI: 0,
+  layers: [],          // sorted layer *indices* (ints)
+  playing: false,
+  playTimer: null,
+  // live
+  liveEvt: null,
+  liveDir: '',
+};
+
+// ══════════════════════════════════════════════════════════════════════
+//  Mode / view switching
+// ══════════════════════════════════════════════════════════════════════
+function setMode(m) {
+  st.mode = m;
+  document.getElementById('browse').style.display = m === 'browse' ? 'flex' : 'none';
+  document.getElementById('live').style.display   = m === 'live'   ? 'flex' : 'none';
+  document.getElementById('tab-browse').classList.toggle('active', m === 'browse');
+  document.getElementById('tab-live').classList.toggle('active',   m === 'live');
+}
+
+function setView(v) {
+  st.view = v;
+  ['slide','grid','compare','metrics'].forEach(n => {
+    document.getElementById('view-' + n).style.display = n === v ? 'flex' : 'none';
+    document.getElementById('v-' + n)?.classList.toggle('active', n === v);
+  });
+  if (v === 'slide')   renderSlide();
+  if (v === 'grid')    renderGrid();
+  if (v === 'compare') renderCompare();
+  if (v === 'metrics') renderMetrics();
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  Load manifest
+// ══════════════════════════════════════════════════════════════════════
+async function loadResults() {
+  const dir = document.getElementById('br-dir').value.trim();
+  if (!dir) return;
+  st.dir = dir;
+  setStatus('Loading…');
+  try {
+    const r = await fetch('/api/manifest?results_dir=' + encodeURIComponent(dir));
+    manifest = await r.json();
+    if (manifest.error) { setStatus('Error: ' + manifest.error); return; }
+    buildImageIndex();
+    populateSelectors();
+    const ni = Object.keys(manifest.images || {}).length;
+    const np = Object.keys(manifest.projections || {}).length;
+    setStatus(`Loaded · ${np} projections · ${ni} images`);
+  } catch (e) {
+    setStatus('Fetch error: ' + e.message);
+  }
+}
+
+function buildImageIndex() {
+  imgIdx = {};
+  for (const [relPath, meta] of Object.entries(manifest.images || {})) {
+    const proj = meta.projection;
+    const layer = meta.layer, cfg = meta.cfg, seed = meta.seed;
+    // slug from path: grids/by_projection/{proj}/{slug}/per_layer/{file}
+    const parts = relPath.split('/');
+    if (parts.length < 5) continue;
+    const slug = parts[3];
+    imgIdx[proj]                              ??= {};
+    imgIdx[proj][slug]                        ??= {};
+    imgIdx[proj][slug][layer]                 ??= {};
+    imgIdx[proj][slug][layer][cfg]            ??= {};
+    imgIdx[proj][slug][layer][cfg][seed]        = relPath;
+  }
+}
+
+function populateSelectors() {
+  const projs = Object.keys(manifest.projections || {});
+  const pts   = manifest.probe_text_stats || {};
+
+  // Projections
+  const pSel = document.getElementById('br-proj');
+  pSel.innerHTML = projs.map(k => `<option value="${k}">${k}</option>`).join('');
+  st.proj = projs[0] || null;
+
+  // Probes — prefer ordering by probe_text_stats key order (insertion order)
+  const slugsFromPts = Object.keys(pts);
+  const slugsFromIdx = st.proj ? Object.keys(imgIdx[st.proj] || {}) : [];
+  const slugs = slugsFromPts.length ? slugsFromPts : slugsFromIdx;
+
+  const bSel = document.getElementById('br-probe');
+  bSel.innerHTML = slugs.map(s => {
+    const text = (pts[s]?.text || s).slice(0, 55);
+    return `<option value="${s}">${text}</option>`;
+  }).join('');
+  st.probe = slugs[0] || null;
+
+  refreshCfgSeed();
+}
+
+function onProbeChange() {
+  st.probe = document.getElementById('br-probe').value;
+  refreshCfgSeed();
+}
+function onProjChange() {
+  st.proj = document.getElementById('br-proj').value;
+  refreshCfgSeed();
+}
+function onParamChange() {
+  st.cfg  = parseFloat(document.getElementById('br-cfg').value);
+  st.seed = parseInt(document.getElementById('br-seed').value);
+  updateLayerList();
+  renderCurrentView();
+}
+
+function refreshCfgSeed() {
+  const layerMap = imgIdx[st.proj]?.[st.probe] || {};
+  const cfgSet = new Set(), seedSet = new Set();
+  for (const cfgMap of Object.values(layerMap))
+    for (const [c, sMap] of Object.entries(cfgMap)) {
+      cfgSet.add(parseFloat(c));
+      Object.keys(sMap).forEach(s => seedSet.add(parseInt(s)));
+    }
+  const cfgs  = [...cfgSet].sort((a,b)=>a-b);
+  const seeds = [...seedSet].sort((a,b)=>a-b);
+
+  document.getElementById('br-cfg').innerHTML  = cfgs.map(c  => `<option value="${c}">${c}</option>`).join('');
+  document.getElementById('br-seed').innerHTML = seeds.map(s => `<option value="${s}">${s}</option>`).join('');
+  st.cfg  = cfgs[0]  ?? null;
+  st.seed = seeds[0] ?? null;
+  updateLayerList();
+  renderCurrentView();
+}
+
+function updateLayerList() {
+  const layerMap = imgIdx[st.proj]?.[st.probe] || {};
+  const layers = Object.entries(layerMap)
+    .filter(([, cm]) => cm[st.cfg]?.[st.seed] !== undefined)
+    .map(([l]) => parseInt(l))
+    .sort((a,b) => a-b);
+  st.layers = layers;
+  st.layerI = Math.max(0, Math.min(st.layerI, layers.length - 1));
+  const max = Math.max(0, layers.length - 1);
+  ['layer-slider','cmp-slider'].forEach(id => {
+    const el = document.getElementById(id);
+    el.max = max; el.value = st.layerI;
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  Navigation helpers
+// ══════════════════════════════════════════════════════════════════════
+function currentLayer() {
+  return st.layers.length ? st.layers[st.layerI] : null;
+}
+
+function getCurrentRelPath(proj, probe, cfg, seed, layerI) {
+  proj   ??= st.proj;   probe ??= st.probe;
+  cfg    ??= st.cfg;    seed  ??= st.seed;
+  layerI ??= st.layerI;
+  const layer = st.layers[layerI];
+  return layer !== undefined ? imgIdx[proj]?.[probe]?.[layer]?.[cfg]?.[seed] : null;
+}
+
+function imgUrl(relPath) {
+  return '/api/image?results_dir=' + encodeURIComponent(st.dir) + '&rel_path=' + encodeURIComponent(relPath);
+}
+
+function stepLayer(delta) {
+  if (!st.layers.length) return;
+  st.layerI = Math.max(0, Math.min(st.layerI + delta, st.layers.length - 1));
+  syncSliders();
+  renderCurrentView();
+}
+function jumpLayerIdx(i) {
+  if (!st.layers.length) return;
+  st.layerI = i < 0 ? st.layers.length - 1 : i;
+  syncSliders();
+  renderCurrentView();
+}
+function onSlider(val) {
+  st.layerI = parseInt(val);
+  ['layer-slider','cmp-slider'].forEach(id => document.getElementById(id).value = val);
+  renderCurrentView();
+}
+function syncSliders() {
+  ['layer-slider','cmp-slider'].forEach(id => document.getElementById(id).value = st.layerI);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  Render dispatcher
+// ══════════════════════════════════════════════════════════════════════
+function renderCurrentView() {
+  if (st.view === 'slide')   renderSlide();
+  if (st.view === 'grid')    renderGrid();
+  if (st.view === 'compare') renderCompare();
+  if (st.view === 'metrics') renderMetrics();
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  Slideshow view
+// ══════════════════════════════════════════════════════════════════════
+function renderSlide() {
+  const relPath = getCurrentRelPath();
+  const layer   = currentLayer();
+  const img     = document.getElementById('main-img');
+
+  if (relPath) {
+    img.src = imgUrl(relPath);
+    img.title = `Click to enlarge  ·  L${layer}`;
+  } else {
+    img.src = '';
+  }
+
+  document.getElementById('layer-counter').textContent =
+    layer !== null ? `L${layer}  ·  ${st.layerI+1} / ${st.layers.length}` : '—';
+
+  document.getElementById('slide-caption').textContent = layer !== null
+    ? `${st.proj}  ·  CFG ${st.cfg}  ·  seed ${st.seed}`
+    : 'No images loaded';
+
+  renderThumbStrip();
+  updateLayerMeta(layer);
+}
+
+function renderThumbStrip() {
+  const strip = document.getElementById('thumb-strip');
+  // Only rebuild if probe/proj/cfg/seed changed significantly — for perf on
+  // arrow-key rapid navigation just update the active highlight.
+  const key = `${st.proj}|${st.probe}|${st.cfg}|${st.seed}`;
+  if (strip.dataset.key !== key) {
+    strip.dataset.key = key;
+    strip.innerHTML = '';
+    st.layers.forEach((layer, i) => {
+      const rp = imgIdx[st.proj]?.[st.probe]?.[layer]?.[st.cfg]?.[st.seed];
+      if (rp) {
+        const el = document.createElement('img');
+        el.className = 'thumb' + (i === st.layerI ? ' active' : '');
+        el.src = imgUrl(rp); el.loading = 'lazy';
+        el.title = `L${layer}`;
+        el.onclick = () => { st.layerI = i; syncSliders(); renderCurrentView(); };
+        strip.appendChild(el);
+      } else {
+        const ph = document.createElement('div');
+        ph.className = 'thumb-ph'; ph.textContent = `L${layer}`;
+        strip.appendChild(ph);
+      }
+    });
+  } else {
+    // Just update active class
+    strip.querySelectorAll('.thumb').forEach((el, i) => el.classList.toggle('active', i === st.layerI));
+  }
+  // Scroll active into view
+  const active = strip.querySelectorAll('.thumb,.thumb-ph')[st.layerI];
+  if (active) active.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  Grid view
+// ══════════════════════════════════════════════════════════════════════
+function renderGrid() {
+  const container = document.getElementById('grid-cells');
+  container.innerHTML = '';
+  st.layers.forEach((layer, i) => {
+    const rp = imgIdx[st.proj]?.[st.probe]?.[layer]?.[st.cfg]?.[st.seed];
+    const cell = document.createElement('div');
+    cell.className = 'gcell';
+    cell.title = `L${layer}`;
+    cell.onclick = () => { st.layerI = i; syncSliders(); setView('slide'); };
+    if (rp) {
+      const img = document.createElement('img');
+      img.src = imgUrl(rp); img.loading = 'lazy';
+      cell.appendChild(img);
+    }
+    const lbl = document.createElement('div');
+    lbl.className = 'glabel'; lbl.textContent = `L${layer}`;
+    cell.appendChild(lbl);
+    container.appendChild(cell);
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  Compare view  (all projections, same probe/layer/cfg/seed)
+// ══════════════════════════════════════════════════════════════════════
+function renderCompare() {
+  const layer = currentLayer();
+  const projs = Object.keys(manifest?.projections || {});
+  const cmp   = document.getElementById('cmp-cells');
+  cmp.innerHTML = '';
+
+  projs.forEach(proj => {
+    const rp   = imgIdx[proj]?.[st.probe]?.[layer]?.[st.cfg]?.[st.seed];
+    const cell = document.createElement('div'); cell.className = 'ccell';
+    const lbl  = document.createElement('div'); lbl.className = 'clabel';
+    lbl.textContent = proj; cell.appendChild(lbl);
+    if (rp) {
+      const img = document.createElement('img');
+      img.src = imgUrl(rp); img.loading = 'lazy';
+      img.onclick = () => openLightbox(rp, proj + '  L' + layer);
+      cell.appendChild(img);
+    } else {
+      const m = document.createElement('div'); m.className = 'missing';
+      m.textContent = 'no image'; cell.appendChild(m);
+    }
+    cmp.appendChild(cell);
+  });
+
+  document.getElementById('cmp-counter').textContent =
+    layer !== null ? `L${layer}  ·  ${st.layerI+1} / ${st.layers.length}` : '—';
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  Metrics view
+// ══════════════════════════════════════════════════════════════════════
+function renderMetrics() {
+  const body = document.getElementById('metrics-body');
+  if (!manifest) { body.innerHTML = '<p style="color:var(--dim)">Load a manifest first.</p>'; return; }
+
+  let html = '';
+
+  // ── Seed variance sparkline for current (proj, probe, cfg) ──
+  const svAll = manifest.seed_variance || {};
+  const svData = {};
+  for (const [key, rec] of Object.entries(svAll)) {
+    const parts = key.split('/');
+    if (parts.length < 4) continue;
+    const kproj  = parts.slice(0, -3).join('/');
+    const kslug  = parts[parts.length - 3];
+    const klayer = parseInt(parts[parts.length - 2].replace(/^L0*/, '') || '0');
+    const kcfg   = parseFloat(parts[parts.length - 1].replace('CFG', ''));
+    if (kproj === st.proj && kslug === st.probe && kcfg == st.cfg)
+      svData[klayer] = rec.mean_pixel_var;
+  }
+  const svLayers = Object.keys(svData).map(Number).sort((a,b)=>a-b);
+
+  if (svLayers.length > 1) {
+    html += `<h3>Seed variance across layers  ·  ${st.probe}  ·  CFG ${st.cfg}</h3>`;
+    const vals = svLayers.map(l => svData[l]);
+    const minV = Math.min(...vals), maxV = Math.max(...vals);
+    const W=560,H=160,PX=36,PY=20;
+    const xs = i => PX + i * (W-PX*2) / Math.max(svLayers.length-1,1);
+    const ys = v => H - PY - (v - minV) / (maxV - minV + 1e-9) * (H - PY*2);
+    const pts = svLayers.map((l,i) => `${xs(i)},${ys(svData[l])}`).join(' ');
+    const minL = svLayers[vals.indexOf(minV)];
+    html += `<svg width="${W}" height="${H}" style="display:block;margin-bottom:8px;border:1px solid var(--border);border-radius:4px">
+      <rect width="${W}" height="${H}" fill="var(--bg2)"/>
+      <polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="1.8"/>
+      ${svLayers.map((l,i) => {
+        const cx=xs(i), cy=ys(svData[l]);
+        const isMin = l === minL;
+        return `<circle cx="${cx}" cy="${cy}" r="${isMin?4:2.5}" fill="${isMin?'var(--green)':'var(--accent)'}"/>
+          <text x="${cx}" y="${H-4}" text-anchor="middle" fill="var(--dim)" font-size="9" font-family="monospace">L${l}</text>`;
+      }).join('')}
+      <text x="${PX}" y="14" fill="var(--dim)" font-size="9" font-family="monospace">${maxV.toFixed(0)}</text>
+      <text x="${PX}" y="${H-PY+12}" fill="var(--dim)" font-size="9" font-family="monospace">${minV.toFixed(0)}</text>
+      <text x="${W/2}" y="13" text-anchor="middle" fill="var(--green)" font-size="9" font-family="monospace">▼ min at L${minL}</text>
+    </svg>`;
+  }
+
+  // ── Validation metrics table ──
+  const val = manifest.projections?.[st.proj]?.validation || {};
+  const svd = manifest.projections?.[st.proj]?.svd       || {};
+  const allL = [...new Set([...Object.keys(val), ...Object.keys(svd)])].map(Number).sort((a,b)=>a-b);
+
+  if (allL.length) {
+    html += `<h3>Projection metrics  ·  ${st.proj}</h3>
+    <table><tr><th>Layer</th><th>R²</th><th>nn@5</th><th>cos dist</th><th>erank</th><th>n_vis</th><th>cond #</th></tr>`;
+    allL.forEach(l => {
+      const v = val[l] || {}, s = svd[l] || {};
+      const r2   = v.projection_r2;
+      const nn   = v.nn_recall_at_5;
+      const isCur = l === currentLayer();
+      html += `<tr style="${isCur ? 'background:var(--bg3)' : ''}">
+        <td class="${isCur ? 'hi' : ''}">L${l}</td>
+        <td class="${r2 != null && r2 > 0.2 ? 'good' : r2 != null && r2 < 0 ? 'warn' : ''}">${fmt(r2)}</td>
+        <td class="${nn != null && nn > 0.6 ? 'good' : ''}">${fmt(nn)}</td>
+        <td>${fmt(v.cosine_dist_mean)}</td>
+        <td>${fmt(s.erank)}</td>
+        <td>${s.n_visible ?? '—'}</td>
+        <td>${fmtSci(s.condition_number)}</td>
+      </tr>`;
+    });
+    html += '</table>';
+  }
+
+  // ── Probe text stats ──
+  const pts = manifest.probe_text_stats || {};
+  const slugs = Object.keys(pts);
+  if (slugs.length) {
+    html += `<h3>Probe text stats</h3>
+    <table><tr><th>Probe</th><th>tokens</th><th>perplexity</th><th>d_act@cur</th><th>d_clip@cur</th></tr>`;
+    slugs.forEach(slug => {
+      const p   = pts[slug] || {};
+      const pcd = manifest.probe_corpus_distances?.[slug]?.[st.proj]?.[currentLayer()] || {};
+      const isSel = slug === st.probe;
+      html += `<tr style="${isSel ? 'background:var(--bg3)' : ''}">
+        <td class="${isSel ? 'hi' : ''}" title="${slug}">${(p.text||slug).slice(0,45)}</td>
+        <td>${p.n_tokens ?? '—'}</td>
+        <td>${fmt(p.perplexity)}</td>
+        <td>${fmt(pcd.d_act)}</td>
+        <td>${fmt(pcd.d_clip)}</td>
+      </tr>`;
+    });
+    html += '</table>';
+  }
+
+  body.innerHTML = html;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  Layer metadata sidebar
+// ══════════════════════════════════════════════════════════════════════
+function updateLayerMeta(layer) {
+  const meta = document.getElementById('layer-meta');
+  if (!manifest || layer === null) { meta.style.display = 'none'; return; }
+  meta.style.display = 'block';
+
+  const pts = manifest.probe_text_stats?.[st.probe] || {};
+  const pcd = manifest.probe_corpus_distances?.[st.probe]?.[st.proj]?.[layer] || {};
+  const cfgG = parseFloat(st.cfg).toString(); // g-format: 25.0 → "25", 7.5 → "7.5"
+  const svKey = `${st.proj}/${st.probe}/L${String(layer).padStart(4,'0')}/CFG${cfgG}`;
+  const sv  = manifest.seed_variance?.[svKey] || {};
+  const val = manifest.projections?.[st.proj]?.validation?.[layer] || {};
+  const svd = manifest.projections?.[st.proj]?.svd?.[layer] || {};
+
+  document.getElementById('meta-body').innerHTML = `
+    <table class="mtable">
+      <tr class="section-hdr"><td colspan="2">Probe</td></tr>
+      <tr><th>tokens</th><td class="val">${pts.n_tokens ?? '—'}</td></tr>
+      <tr><th>perplexity</th><td class="val">${fmt(pts.perplexity)}</td></tr>
+      <tr class="section-hdr"><td colspan="2">Proj @ L${layer}</td></tr>
+      <tr><th>R²</th><td class="val">${fmt(val.projection_r2)}</td></tr>
+      <tr><th>nn@5</th><td class="val">${fmt(val.nn_recall_at_5)}</td></tr>
+      <tr><th>erank</th><td class="val">${fmt(svd.erank)}</td></tr>
+      <tr><th>n_visible</th><td class="val">${svd.n_visible ?? '—'}</td></tr>
+      <tr><th>cond #</th><td class="val">${fmtSci(svd.condition_number)}</td></tr>
+      <tr class="section-hdr"><td colspan="2">Corpus dist</td></tr>
+      <tr><th>d_act</th><td class="val">${fmt(pcd.d_act)}</td></tr>
+      <tr><th>d_clip</th><td class="val">${fmt(pcd.d_clip)}</td></tr>
+      <tr class="section-hdr"><td colspan="2">Seed variance</td></tr>
+      <tr><th>mean_px_var</th><td class="val">${sv.mean_pixel_var != null ? sv.mean_pixel_var.toFixed(0) : '—'}</td></tr>
+      <tr><th>n_seeds</th><td class="val">${sv.n_seeds ?? '—'}</td></tr>
+    </table>`;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  Play/pause
+// ══════════════════════════════════════════════════════════════════════
+function togglePlay() {
+  st.playing = !st.playing;
+  document.getElementById('play-btn').textContent = st.playing ? '⏸ Pause' : '▶ Play';
+  if (st.playing) scheduleTick(); else clearTimeout(st.playTimer);
+}
+function scheduleTick() {
+  const fps = parseInt(document.getElementById('play-speed').value) || 3;
+  st.playTimer = setTimeout(() => {
+    if (!st.playing) return;
+    if (st.layerI >= st.layers.length - 1) {
+      st.playing = false;
+      document.getElementById('play-btn').textContent = '▶ Play';
+      return;
+    }
+    stepLayer(1);
+    scheduleTick();
+  }, 1000 / fps);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  Lightbox
+// ══════════════════════════════════════════════════════════════════════
+function openLightbox(relPath, caption) {
+  if (!relPath) return;
+  document.getElementById('lb-img').src = imgUrl(relPath);
+  document.getElementById('lb-caption').textContent = caption || '';
+  document.getElementById('lightbox').classList.add('open');
+}
+function closeLightbox() {
+  document.getElementById('lightbox').classList.remove('open');
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  Live inference
+// ══════════════════════════════════════════════════════════════════════
+async function loadLiveResults() {
+  const dir = document.getElementById('lv-dir').value.trim();
+  if (!dir) return;
+  st.liveDir = dir;
+  setStatus('Loading live manifest…');
+  try {
+    const r = await fetch('/api/manifest?results_dir=' + encodeURIComponent(dir));
+    const m = await r.json();
+    if (m.error) { setStatus('Error: ' + m.error); return; }
+    const projs = Object.keys(m.projections || {})
+      .filter(k => (m.projections[k].mode || '') === 'per_layer');
+    const sel = document.getElementById('lv-proj');
+    sel.innerHTML = projs.map(p => `<option value="${p}">${p}</option>`).join('');
+    setStatus(`Live ready · ${projs.length} per_layer projections`);
+  } catch (e) {
+    setStatus('Error: ' + e.message);
+  }
+}
+
+function startGenerate() {
+  const dir   = document.getElementById('lv-dir').value.trim();
+  const proj  = document.getElementById('lv-proj').value;
+  const text  = document.getElementById('lv-text').value.trim();
+  const cfg   = parseFloat(document.getElementById('lv-cfg').value);
+  const seed  = parseInt(document.getElementById('lv-seed').value);
+  const steps = parseInt(document.getElementById('lv-steps').value);
+  const layers = document.getElementById('lv-layers').value.trim() || 'all';
+
+  if (!text || !proj || !dir) { setStatus('Fill in results dir, projection, and probe text.'); return; }
+
+  // Close previous stream
+  if (st.liveEvt) { st.liveEvt.close(); st.liveEvt = null; }
+
+  // Clear UI
+  document.getElementById('live-grid').innerHTML = '';
+  document.getElementById('live-hdr').textContent = `"${text}" — generating…`;
+  document.getElementById('lv-prog').style.display = 'block';
+  document.getElementById('gen-btn').disabled = true;
+  setProgress(0, 0);
+  setStatus('Starting…');
+
+  const url = new URL('/api/stream', location.origin);
+  url.searchParams.set('results_dir', dir);
+  url.searchParams.set('proj_key', proj);
+  url.searchParams.set('text', text);
+  url.searchParams.set('cfg', cfg);
+  url.searchParams.set('seed', seed);
+  url.searchParams.set('layers', layers);
+  url.searchParams.set('steps', steps);
+
+  const evtSrc = new EventSource(url.toString());
+  st.liveEvt = evtSrc;
+
+  evtSrc.addEventListener('status', e => {
+    const d = JSON.parse(e.data);
+    document.getElementById('lv-status').textContent = d.message;
+  });
+
+  evtSrc.addEventListener('activations_ready', e => {
+    const d = JSON.parse(e.data);
+    // Pre-allocate placeholder cells
+    d.layers.forEach(l => addLiveCell(l));
+  });
+
+  evtSrc.addEventListener('layer_complete', e => {
+    const d = JSON.parse(e.data);
+    updateLiveCell(d.layer, 'data:image/png;base64,' + d.image_b64);
+    setProgress(d.done, d.total);
+  });
+
+  evtSrc.addEventListener('complete', e => {
+    const d = JSON.parse(e.data);
+    document.getElementById('lv-status').textContent = `Done — ${d.total} layers generated.`;
+    document.getElementById('live-hdr').textContent = `"${text}"`;
+    document.getElementById('gen-btn').disabled = false;
+    evtSrc.close(); st.liveEvt = null;
+  });
+
+  evtSrc.addEventListener('error', e => {
+    try {
+      const d = JSON.parse(e.data);
+      document.getElementById('lv-status').textContent = 'Error: ' + d.message;
+    } catch {
+      document.getElementById('lv-status').textContent = 'Connection error.';
+    }
+    document.getElementById('gen-btn').disabled = false;
+    evtSrc.close(); st.liveEvt = null;
+  });
+}
+
+function addLiveCell(layer) {
+  const grid = document.getElementById('live-grid');
+  const cell = document.createElement('div');
+  cell.className = 'gcell pending'; cell.id = 'lc-' + layer;
+  cell.innerHTML = `<div class="spin"></div><div class="glabel">L${layer}</div>`;
+  grid.appendChild(cell);
+}
+
+function updateLiveCell(layer, url) {
+  const cell = document.getElementById('lc-' + layer);
+  if (!cell) return;
+  cell.className = 'gcell';
+  cell.innerHTML = `<img src="${url}" loading="lazy" onclick="openLightboxDataUrl('${url}','L${layer}')">
+    <div class="glabel">L${layer}</div>`;
+}
+
+function openLightboxDataUrl(url, caption) {
+  document.getElementById('lb-img').src = url;
+  document.getElementById('lb-caption').textContent = caption || '';
+  document.getElementById('lightbox').classList.add('open');
+}
+
+function setProgress(done, total) {
+  const pct = total > 0 ? (done / total * 100) : 0;
+  document.getElementById('prog-bar').style.width = pct + '%';
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  Keyboard shortcuts
+// ══════════════════════════════════════════════════════════════════════
+document.addEventListener('keydown', e => {
+  if (['INPUT','TEXTAREA','SELECT'].includes(e.target.tagName)) return;
+  if (document.getElementById('lightbox').classList.contains('open')) {
+    if (e.key === 'Escape') closeLightbox();
+    return;
+  }
+  if (st.mode === 'browse') {
+    if (e.key === 'ArrowLeft')  { e.preventDefault(); stepLayer(-1); }
+    if (e.key === 'ArrowRight') { e.preventDefault(); stepLayer(1);  }
+    if (e.key === 'Home')       { e.preventDefault(); jumpLayerIdx(0); }
+    if (e.key === 'End')        { e.preventDefault(); jumpLayerIdx(-1); }
+    if (e.key === ' ')          { e.preventDefault(); togglePlay(); }
+    if (e.key === 'g') setView('grid');
+    if (e.key === 's') setView('slide');
+    if (e.key === 'c') setView('compare');
+    if (e.key === 'm') setView('metrics');
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════
+//  Utils
+// ══════════════════════════════════════════════════════════════════════
+function fmt(v)    { return (v != null) ? Number(v).toFixed(3) : '—'; }
+function fmtSci(v) { return (v != null) ? Number(v).toExponential(2) : '—'; }
+function setStatus(msg) { document.getElementById('hdr-status').textContent = msg; }
+
+// ══════════════════════════════════════════════════════════════════════
+//  Init — pre-fill results dir from server defaults
+// ══════════════════════════════════════════════════════════════════════
+(async () => {
+  try {
+    const r = await fetch('/api/defaults');
+    const d = await r.json();
+    if (d.results_dir) {
+      document.getElementById('br-dir').value = d.results_dir;
+      document.getElementById('lv-dir').value = d.results_dir;
+    }
+  } catch {}
+})();
+</script>
+</body>
+</html>
