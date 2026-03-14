@@ -264,6 +264,70 @@ A second run with `EleutherAI/pythia-410m` produced meaningfully different geome
 
 ---
 
+### Pythia-410m results (24 layers, quelle corpus — 7304 samples)
+
+A third run using the quelle behavioural corpus (7,304 texts: MMLU, GSM8K, semantic
+diversity, periphery, perturbation families) produces geometry that differs from the
+5000-sample image-caption run in two important ways.
+
+**SVD metrics (erank, condition number, n_visible):**
+
+- **L1 dip now present at α=1 as well as α=1000.**  In the image-caption run, the
+  L0-peak / L1-dip erank pattern only appeared at α=1000 (attributed to alpha
+  differentially shrinking the embedding layer).  With the quelle corpus it also
+  appears at α=1 (L0≈430 → L1≈390, then rises).  This implies the dip is partly
+  a Pythia architectural feature that the image-caption corpus geometry was masking,
+  not purely a high-alpha effect.
+- **L0 condition number spike at α=1 (~4×10⁸).**  Not infinite like GPT-2, but
+  elevated relative to all other layers.  The quelle corpus produces a near-singular
+  L0 projection at low alpha — do not use L0 at α=1 for generation or topology
+  claims.  α=1000 L0 is well-conditioned (~6×10⁷), consistent with prior results.
+- **Secondary condition number peak at ~L11–12 for α=1.**  Not observed in the
+  image-caption run.  Could reflect a mid-network representational transition;
+  worth cross-referencing against the convergence layer map when Exp 5 images exist.
+- **n_visible ≈ 767/768 for both alphas at all layers.**  Unchanged.
+
+**Validation metrics (R², nn_recall@5):**
+
+- **α=1 R² is negative at L0** (~−0.08), consistent with the near-singular condition
+  number.  The projection overfits at L0 under low regularisation; R² recovers to
+  positive by L1.
+- **Both alpha values show a nn_recall plateau around L6–12**, then a second rise
+  from L13 onward.  This two-phase shape is not present in the image-caption results
+  and may reflect two distinct representational transitions in Pythia: rapid
+  syntactic/structural build-up through L6, then a second semantic refinement phase
+  from L13 to L23.  The plateau layers (L6–12) correspond to the cluster in the
+  R² vs nn_recall scatter where both measures stall simultaneously.
+- **Final values at L23:** α=1 → R²≈0.32, nn_recall≈0.69; α=1000 → R²≈0.40,
+  nn_recall≈0.59.  Broadly consistent with the 5000-sample run.
+
+**R² vs nn_recall@5 scatter (all layers, both alphas):**
+
+- The two alphas trace **two parallel tracks** in (R², nn_recall) space — neither
+  dominates on both axes at any layer.  Choosing α always trades R² for nn_recall
+  with no free lunch.
+- The tracks do not cross: there is no layer where α=1 achieves α=1000's R² while
+  also beating it on nn_recall.  The choice is structurally clean.
+- The cluster of overlapping points at approximately (0.27–0.30, 0.57–0.58) is
+  where the plateau layers of both alpha values land.
+
+**Implication for survey-pass design:**
+
+The nn_recall plateau at L6–12 means a survey that samples only those layers will
+miss the late-layer rise.  Survey passes should include at least one layer from each
+phase: L0–5 (early build-up), L6–12 (plateau), L13–23 (late refinement).  A uniform
+step of 4 layers (L0, L4, L8, L12, L16, L20, L23) covers all three phases.
+
+**Corpus-geometry interaction note:**
+
+The appearance of the L1 dip at α=1 only with the quelle (text-heavy) corpus, and
+not with the image-caption corpus, directly motivates Exp 8 (corpus-stability test).
+If the erank profile shape depends on corpus composition at low alpha, then the
+convergence layer — which is downstream of the erank profile — may also shift with
+corpus.  This makes Exp 8 more important than previously assessed, not less.
+
+---
+
 ## Confounder analysis
 
 ### Prompt-corpus membership as a confound
