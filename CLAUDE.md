@@ -1123,3 +1123,83 @@ activating more mid-network semantic processing than a typical equation-style pr
   register_shift) of the same base probe converge at the same layer?
 - Do all 6 variants cluster or spread in CLIP space at L23?
 - Is `negation` qualitatively different from `authority_bias` in cosine distance from base?
+
+---
+
+### Exp 6 — Perturbation family CLIP clustering (L23, α=1, quelle corpus)
+
+**Goal:** Test whether perturbation variants of the same base prompt cluster within their
+family in CLIP space at L23, and whether perturbation type modulates distance from base.
+
+**Design:**
+- 4 group_ids from quelle `perturbation_families.jsonl` (0287, 0101, 0366, 0332)
+- Variants available per family: base, reph(rase), cont(ext_added), regi(ster_shift)
+  — families vary; 0101 and 0332 had only base + regi (n=2 each); 0287 had 4; 0366 had 3
+- 11 total variants; same output dir as Exp 5 (projection reused)
+- Primary metric: pairwise cosine distance heatmap at L23, α=1
+- Between/within family ratio as scalar summary
+
+**Results:**
+
+```
+Within-family distances:   mean=0.0798  std=0.1327  n=11
+Between-family distances:  mean=0.2165  std=0.0823  n=44
+Between/within ratio:      2.71  (>1 = variants cluster within family)
+```
+
+**Main finding: variants cluster within family (ratio 2.71), but the within-family std
+(0.1327) exceeds the mean (0.0798) — the distribution is bimodal, not uniformly tight.**
+
+**Family-by-family:**
+
+- **0287 (base/reph/cont/regi):** Tightest family. All 4 variants land in nearly the same
+  CLIP region. Rephrasing, adding context, and shifting register are all transparent to
+  the projection for this prompt. Dark block throughout the 0287 diagonal quadrant.
+
+- **0101, 0332 (base/regi only):** Both tight. Register_shift alone does not move the
+  CLIP vector out of the family cluster.
+
+- **0366 (base/cont/regi) — anomalous family:** `0366/base` vs `0366/cont` ≈ 0.35 cosine
+  distance (yellow on heatmap) — the highest within-family distance in the dataset, equal
+  to typical between-family distances.  `0366/base` vs `0366/regi` also very high (yellow).
+  Without 0366, within-family distances would be near zero and the ratio much higher.
+  The high within-family std (0.1327) is almost entirely 0366-driven.
+
+**Interpretation of 0366 anomaly:**
+
+For this specific prompt, `context_added` and `register_shift` cross a semantic boundary
+in CLIP space — the perturbation reframes the meaning, not just the surface form. The
+base prompt likely has ambiguous or minimal semantic content that gets pinned to a specific
+CLIP region by added context.  A register shift changes the conceptual referent enough to
+produce a qualitatively different projection.  0366 is a **semantic-sensitivity probe**:
+its CLIP representation is unstable across the perturbation family.  Examine the raw text
+to characterise what makes this prompt context-sensitive.
+
+**Connection to Exp 5:**
+
+| | Exp 5 (input category) | Exp 6 (surface form) |
+|---|---|---|
+| What varies | Category (benchmark/periphery/etc.) | Perturbation type within family |
+| Pythia behaviour | Periphery probes processed deeper, more compression-sensitive | Most variants transparent; one family breaks |
+| Conclusion | Category matters for representational depth | Perturbation mostly transparent, occasionally crosses semantic boundary |
+
+Perturbation variants are well-formed English in Pythia's training distribution — they do
+not stress the representation the way periphery probes do.  The 2.71 ratio is expected
+given this.  The 0366 exception is more interesting: it identifies a prompt where meaning
+is sensitive to framing, not just surface form.
+
+**Between-family structure:**
+- 0287 vs 0366: highest between-family distances (yellow throughout cross-block)
+  — these two families are semantically very different
+- 0287 vs 0332 and 0101 vs 0366: moderate (green/teal)
+
+**Limitation:** Unequal variant counts per family (n=2 to 4); negation and authority_bias
+variants were not included in this run (missing from quelle output for these group_ids or
+not generated).  The ratio is computed on 11 variants, not a balanced 4×6 design.
+A balanced run with all 6 variants per family would give a more reliable estimate of
+which perturbation types are most disruptive.
+
+**Key open question:** What is the text of 0366?  If it is a short, ambiguous, domain-neutral
+prompt, the context_added variant's large distance (0.35) tells us the meaning was almost
+entirely carried by the added context rather than the base — a near-empty base prompt whose
+CLIP identity is context-determined.
