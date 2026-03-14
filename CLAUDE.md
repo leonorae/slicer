@@ -1124,6 +1124,53 @@ activating more mid-network semantic processing than a typical equation-style pr
 - Do all 6 variants cluster or spread in CLIP space at L23?
 - Is `negation` qualitatively different from `authority_bias` in cosine distance from base?
 
+#### Visual sweep observations — `what_is_a_bicycle_made_of`, 5 seeds, all 24 layers [claude, 2026-03-14]
+
+> **Source:** 5 seed images viewed as vertical strips (L0 top → L23 bottom).
+> Probe: `what_is_a_bicycle_made_of` (benchmark_mmlu category, cross-alpha stable at L19).
+> CFG=25, α=1, Pythia-410m, quelle corpus.
+
+**Three visual phases visible and consistent across all 5 seeds:**
+
+1. **L0–~L3 (embedding regime):** Fine-grained noisy texture, relatively uniform across
+   seeds.  The embedding layer and first transformer steps contribute little discriminative
+   structure — seed variation is low because the conditioning is near-degenerate.
+
+2. **~L4–L15 (high-variance regime):** Large organic blobs, swirls, and diagonal wave
+   interference patterns develop.  This region is highly seed-dependent — seed 2 produced a
+   distinctive red/pink vortex absent in all other seeds; seed 3 had large circular forms.
+   The images here are the SD prior filling in a diffuse CLIP vector.  High within-layer seed
+   variance is expected and consistent with the quantitative mean_pixel_var being elevated
+   in this region.
+
+3. **~L16–L23 (convergence and post-convergence regime):** Texture becomes more organised
+   and repeatable across seeds.  Cross-seed agreement increases, consistent with L19 as the
+   metric-identified convergence layer for this probe.  Diagonal wave/stripe patterns appear
+   in multiple seeds at roughly the same position.
+
+**Near-bottom discontinuity (~L20–22 region):**  All 5 seeds show a visually anomalous frame
+at approximately the same layer position — one frame that breaks qualitatively from its
+neighbours.  Its character differs per seed (seed 1: dark cross/church-window structure;
+seed 2: dense coloured blocks; seed 5: near-black with sparse dots) but the discontinuity
+itself is cross-seed consistent.  This layer sits *above* the L19 convergence minimum in
+terms of layer index and may reflect a local CLIP neighbourhood with multiple SD attractors
+that the convergence dip has already passed.  Layer index not yet confirmed from manifest.
+
+**Interpretation: seed variance is signal, not noise.**  Each seed samples from
+p(image | CLIP vector) at that layer.  High cross-seed variance means the CLIP vector at
+that layer is in a region SD treats as ambiguous — multiple coherent attractors are
+consistent with the conditioning.  Low variance (convergence layer) means the CLIP vector
+has become specific enough to rule out alternatives.  The set of visual attractors that
+seeds fall into characterises the semantic neighbourhood of the projection at each layer,
+not a failure of the method.
+
+**Implication for CFG/alpha tuning:**  The high-variance middle regime (~L4–L15) is not
+fixable by raising CFG or changing alpha — it reflects genuine ambiguity in the CLIP
+vector at those layers.  The conditioning signal is there; the issue is that the CLIP
+neighbourhood at those layers maps to a broad, multimodal SD distribution.  The
+convergence layer (L19) is where this ambiguity resolves, and that appears to be a
+property of Pythia's representation depth for this probe, not a tuning parameter.
+
 ---
 
 ### Exp 6 — Perturbation family CLIP clustering (L23, α=1, quelle corpus)
