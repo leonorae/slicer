@@ -1274,3 +1274,187 @@ deterministic problem."  A cleaner Exp 6 would use domain-appropriate perturbati
 to compare against more grounded representational metrics being developed separately.
 The design gap is noted for if/when perturbation-sensitivity is revisited with those
 tools.
+
+---
+
+## Generation efficiency — principles and planned changes
+
+The general goal: extract as much signal as possible before touching SD, and when
+generation is unavoidable, use the minimum fidelity that preserves the metric of
+interest.
+
+### Denoising step reduction
+
+`DiffusionMicroscope.generate_from_vector()` defaults to 30 steps
+(`generator.py:189`).  This value is hardcoded and not exposed in the experiment
+config JSON.  The `ExperimentRunner.run_generate()` call at `experiment.py:461`
+passes no step argument, so every image costs 30 denoiser forward passes.
+
+**Planned code change:** expose `num_inference_steps` in the config JSON and thread
+it through `experiment.py:461 → generate_from_vector()`.  Default stays 30 for
+full runs; survey passes use 4–8 steps.
+
+**Validation prerequisite before trusting survey-pass results:** run 1 probe ×
+all 24 layers × `[4, 8, 20, 30]` steps × 4 seeds and compare the resulting
+`mean_pixel_var` trajectories.  If the layer ordering of the variance minimum is
+preserved at low step counts (only absolute values shift), survey passes are valid
+for identifying interesting layers.  This is ~384 images vs a full-probe run and
+should be done once before committing to the adaptive generation scheme below.
+Key question: does step reduction preserve the *shape* of the variance trajectory,
+even if it changes absolute variance values?
+
+SDXL Turbo already forces 4 steps (`generator.py:142`); if the SD-1.5 validation
+confirms shape preservation at 4–8 steps, Turbo is a natural survey-pass backbone.
+
+### Adaptive / two-phase generation
+
+For any layer-sweep experiment:
+
+**Phase 1 — survey pass:**
+- 1–2 seeds per layer, all layers, 4–8 denoising steps
+- Computes a cheap proxy variance trajectory
+- Identifies: convergence layers (variance minima), transition layers (high CLIP drift
+  between adjacent layers), anomalous layers (discontinuities)
+
+**Phase 2 — targeted pass:**
+- 16 seeds per *interesting* layer only (convergence ± 2, identified transitions)
+- Full step count (20–30) for reliable `mean_pixel_var`
+- Skip or store minimal images for flat/prior-dominated layers
+
+If 10/24 layers are genuinely prior-dominated (flat high variance), a full 16-seed
+pass at only the interesting 14 layers costs ~12× less than the full grid.
+
+**Config additions needed** (for both phases):
+```json
+"num_inference_steps": 8,
+"survey_seeds": [42, 123],
+"full_seeds": [42, 123, 777, 999, ...]
+```
+The `analyze` phase can then flag which layers were survey-only vs. full-seed.
+
+### Projection-only diagnostics (zero generation)
+
+Several useful metrics require only the cached LLM activations and trained projection
+weights — no SD invocation at all.
+
+**CLIP drift per layer** — `‖proj(act, Ln) − proj(act, L_{n-1})‖` cosine distance
+between adjacent layers for each probe.  Computable from `manifest["probe_clip_vectors"]`
+if populated.  High drift = transition layer; near-zero drift = redundant layer.
+Gives a generation schedule without running a single image.
+
+**Compression-sensitivity profile** — cosine distance between `proj_α1(act, Ln)` and
+`proj_α1000(act, Ln)` at every layer L.  Already computed for Exp 5 last layer;
+extending to all layers gives a 24-dim vector per probe.
+
+**Probe trajectory fingerprint** — either of the above (24-dim drift vector or 24-dim
+variance vector from an existing manifest) as a per-probe representation.  Cluster
+probes by fingerprint shape (DTW or cosine similarity in trajectory space) to find
+data-driven categories that do not assume corpus coverage or semantic content labels.
+Overlay Exp 5 category labels post-hoc to test whether they align with the emergent
+clusters.
+
+These are pure analysis steps — implement as notebook cells reading from an existing
+manifest, not new experiment phases.
+
+---
+
+### Exp 7 — Attractor structure from existing seeds
+
+**Goal:** Characterise p(image | CLIP vector) at each layer as a distribution shape,
+not just a scalar variance.  No new generation required if 16-seed images from Exp 4
+or Exp 5 exist.
+
+**Key idea:** `mean_pixel_var` conflates unimodal-wide and bimodal distributions.
+Clustering the 16 seeds per (probe, layer) by perceptual distance (LPIPS-based
+k-means, k=1–4) reveals:
+- **attractor_count**: estimated number of modes in p(image | CLIP vector)
+- **within-attractor mean**: a meaningful average (averaging within a mode is coherent;
+  averaging across modes produces artefacts)
+- **between-attractor distance**: LPIPS between cluster centroids
+
+**Expected pattern:**
+- Convergence layers (identified in Exp 4/5): attractor_count = 1, low within-cluster
+  variance
+- High-variance middle layers: attractor_count ≥ 2; bimodal seen visually for
+  "the color of Tuesday" L23 α=1 in Exp 2
+- Prior-dominated layers (L0–L3): attractor_count = 1 but large within-cluster
+  variance (uniform prior noise, not a meaningful attractor)
+
+**Distinguishing prior noise from genuine multimodality:** a bimodal distribution at
+L8 where both modes have recognisable visual content is qualitatively different from a
+diffuse unimodal distribution at L2.  The attractor_count metric alone does not
+distinguish these; pairing it with within-cluster variance does.
+
+**Implementation:** post-processing step on existing image files in
+`grids/by_projection/{proj_key}/{text_slug}/per_layer/`.  No new experiment phase.
+
+**Produces:** `analysis/attractor_count_{proj_key}.png` — heatmap of (probe × layer),
+cells coloured by attractor_count; `analysis/attractor_summary.json`.
+
+---
+
+### Exp 8 — Corpus-stability / texture-coloring test
+
+**Goal:** Determine whether the convergence layer is a property of Pythia's
+architecture or of the training corpus.
+
+**Background:** The corpus centroid is the α→∞ attractor — all probes compress
+toward the CLIP vector it encodes.  The corpus also determines `W` (the projection
+matrix).  If the convergence layer (minimum mean_pixel_var) shifts when the corpus
+changes, the corpus is doing more work than expected — convergence layer is partly a
+corpus artefact.  If the convergence layer is stable but the visual texture at that
+layer changes, the corpus acts as a pure aesthetic parameter (centroid shift) without
+altering the representational structure.
+
+**Design:**
+- Model: Pythia-410m
+- Corpus A: current 5000-sample image-caption-heavy mix (baseline from Exp 4/5)
+- Corpus B: Wikipedia-heavy — replace flickr30k/cc3m with wikimedia/wikipedia at
+  equal total n=5000
+- Same 9 probes as Exp 4/5; same layers (0–23); same seeds (16); CFG=25; α=1
+- Primary metric: convergence layer index per probe — compare A vs B
+- Secondary: visual texture at convergence layer — should differ (different centroid)
+
+**Prediction:** convergence layer index is stable across corpora (architecture
+property); the *image content* at the convergence layer shifts from warm amber
+brickwork (Flickr/CC3M centroid) to a more text/encyclopaedia-like aesthetic
+(Wikipedia centroid).
+
+**Cost:** one `train` re-run + survey-pass generation (fast if step-reduction
+validated first).  Full 16-seed generation only at convergence layers.
+
+**This is also a practical generative parameter test:** training Ridge on a
+domain corpus (astronomy, impressionist art, architecture) as a deliberate
+aesthetic knob.  The convergence layer images become domain-tinted versions of
+the probe's LLM representation.
+
+---
+
+### Exp 9 — Data-driven probe categories (trajectory fingerprinting)
+
+**Goal:** Find probe categories that emerge from metric data alone, without reference
+to corpus coverage, semantic content labels, or the Exp 5 input categories.
+
+**Input data (no new generation):** Exp 5 manifest — 20 probes × 24 layers, with:
+- `seed_variance[...]["mean_pixel_var"]` per (probe, layer) — 24-dim vector per probe
+- Cosine distance α=1 vs α=1000 per layer (already plotted for Exp 5) — 24-dim vector
+
+**Method:**
+1. Build the 20 × 24 variance trajectory matrix from the Exp 5 manifest
+2. Normalise each probe's trajectory (z-score or min-max) to compare shapes, not scales
+3. Cluster with k-means (k=2–5) and hierarchical clustering; compare
+4. Also cluster by compression-sensitivity trajectory (cosine-dist-per-layer vector)
+5. Post-hoc overlay: do the emergent clusters correlate with Exp 5 input categories
+   (benchmark_gsm8k / perturbation_base / semantic / periphery)?
+
+**Null result value:** if emergent clusters do not align with Exp 5 categories, it
+means the representational trajectories cut across input categories — the geometry
+does not respect the corpus provenance of the probes.  That is itself a finding.
+
+**Secondary:** PCA of the trajectory matrix — first two PCs describe the dominant
+modes of variation across probes.  What do the extremes of PC1 look like?  This is
+interpretable independently of cluster assignment.
+
+**Implementation:** notebook cells, pure analysis.  No experiment phase or config
+needed.  Prerequisite: Exp 5 manifest must contain `seed_variance` and
+`probe_clip_vectors` entries (populated during Exp 5 `generate` phase).
