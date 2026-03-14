@@ -462,6 +462,9 @@ class ExperimentRunner:
                                 clip_vec,
                                 guidance_scale=cfg,
                                 seed=seed,
+                                num_inference_steps=self.config.get(
+                                    "num_inference_steps", 30
+                                ),
                             )
                             out_path = self.base_dir / rel
                             img.save(str(out_path))
