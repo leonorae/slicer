@@ -1019,3 +1019,107 @@ python run_experiment.py --config experiment_config_exp4_pythia_layersweep.json 
 or was it an artefact of the two probes in Exp 2?  A consistent minimum at L2 across
 concrete, abstract, and unusual tiers would be a strong signal; probe-specific minima
 at different layers would suggest the convergence point is semantics-dependent.
+
+---
+
+### Exp 5 — Convergence layer by probe category (quelle corpus, Pythia-410m)
+
+**Goal:** Test the D12 hypothesis — whether periphery probes (malformed, nonsense,
+mixed-language, domain-outlier) show qualitatively different convergence-layer profiles
+from benchmark probes (MMLU, GSM8K) and semantic/perturbation probes.
+
+**Key design advantage:** All probes drawn from the quelle corpus (7,304 behavioural
+texts) and included in the Ridge training set.  d_act ≈ 0 for all probes by construction
+— the corpus-distance confound from Exps 1–3 is eliminated.  Any observed differences
+are genuine representational properties of the LLM.
+
+**Design:**
+- Model: `EleutherAI/pythia-410m`
+- Corpus: quelle `corpus_full.jsonl` (7,304 texts via `--training_texts_file`)
+- Layers: all 24 (L0–L23)
+- Alpha: 1 and 1000 (both run; cross-alpha convergence stability used as signal validity check)
+- CFG: 25
+- Seeds: 16
+- Probes: source-stratified sample — 4 MMLU, 4 GSM8K, 4 semantic, 4 periphery (1 per
+  subcategory: domain_outlier, mixed_language, malformed, nonsense), 4 perturbation_base
+
+**Results (convergence layer by category, α=1):**
+
+| Category | Mean conv. layer | Mean var range | n |
+|---|---|---|---|
+| benchmark_gsm8k | 5.0 | 1169 | 8 |
+| perturbation_base | 10.0 | 835 | 8 |
+| benchmark_mmlu | 11.5 | 943 | 8 |
+| semantic | 11.6 | 1349 | 8 |
+| **periphery** | **14.4** | **1492** | **8** |
+
+**D12 result: confirmed along two dimensions.**
+
+1. **Periphery probes converge latest** (mean 14.4 vs. 10.0–11.6 for other categories)
+   and show the **sharpest convergence dips** (mean var range 1492, ~79% higher than
+   perturbation_base at 835).
+
+2. **GSM8K converges earliest** (mean 5.0), pulled down by L0 artifacts (flat-profile
+   probes where no layer is meaningfully constraining).  Non-artifact GSM8K probes appear
+   to converge at L5–9 — earlier than knowledge/semantic categories.  Possible
+   interpretation: arithmetic structure in Pythia is computationally cheaper to establish
+   (mid-network) than semantic/conceptual content (late-network).
+
+3. **MMLU and perturbation_base have the flattest profiles** (lowest var range).
+   Academic multiple-choice and simple rephrasings occupy well-covered, stable regions
+   of Pythia's representation space with no strong preferred projection layer.
+
+4. **Within-category scatter is large** — convergence layers span nearly 0–23 within
+   most categories.  Category means are real but do not define clean rules.  The pattern
+   is "noisy but not random."
+
+**L0 artifact:** Multiple probes across all categories converge at L0 with high min_var
+(≥8000), indicating flat variance profiles.  These are excluded from the "genuine
+convergence" interpretation.  Several probes show cross-alpha stability
+(same convergence layer at α=1 and α=1000) which validates the signal as real rather
+than an alpha-dependent artifact: `prince_is_a_butcher` → L9 both; `what_is_a_bicycle`
+→ L19 both; `where_would_you_find_a_bicycle` → L3 both.
+
+**Alpha compression sensitivity by layer (companion plot):**
+
+Cosine distance (α=1 vs α=1000) across all 24 layers confirms the D12 finding from a
+different angle:
+
+- **Periphery probes dominate the top of the compression-sensitivity chart throughout.**
+  `in_sooth_the_particle_doth_e` (archaic English) is highest, starting at ~0.031 at L0
+  before any transformer computation — the *token embeddings* alone already sit in an
+  unusual CLIP region.  `shenme_shi_liangsuo_lilun` (Chinese) rises continuously through
+  L23 with no plateau.  `tvxxl2f_xw4d_qkgx4_cs_09iflq` (random string) and
+  `the_function_returns_none_when` (code) are also elevated.
+
+- **All other categories cluster in a tight lower band** (0.01–0.03 cosine dist at peak).
+  The between-tier gap is large relative to within-tier variance.
+
+- **Common trajectory shape:** Most probes rise from ~0 at L0 to a peak at L8–15,
+  then plateau or slightly decline.  Exception: `shenme_shi_liangsuo_lilun` rises through
+  L23 without plateau — Pythia never reaches a stable compression equilibrium for Chinese text.
+
+- **`in_sooth` at L0 anomaly:** Starting at 0.031 at L0 (vs near-zero for all other probes)
+  means archaic English token embeddings are already corpus-peripheral in CLIP space, before
+  any contextual processing.  Consistent with rare/archaic tokens having sparse Ridge
+  training signal even at the embedding level.
+
+**Coherent three-metric picture for periphery probes:**
+All three metrics point the same direction — Pythia spends more of its representational
+depth processing unusual forms, and when it does settle, the settled representation is
+more sensitive to regularization pressure:
+1. Latest convergence layer (mean 14.4) — takes more layers to crystallize
+2. Sharpest convergence dip (var range 1492) — when it settles, it settles sharply
+3. Highest compression sensitivity (cosine dist 2–4× benchmark band) — late-layer
+   activations are more sensitive to alpha
+
+**Notable individual probe anomaly:** `prince_is_a_butcher_he_sells` (benchmark_gsm8k)
+shows elevated compression sensitivity above the typical GSM8K band.  It is a narrative
+math problem ("Prince is a butcher, he sells...") rather than a pure arithmetic expression,
+activating more mid-network semantic processing than a typical equation-style probe.
+
+**Open questions set up for Exp 6:**
+- Do perturbation variants (rephrase, negation, authority_bias, context_added,
+  register_shift) of the same base probe converge at the same layer?
+- Do all 6 variants cluster or spread in CLIP space at L23?
+- Is `negation` qualitatively different from `authority_bias` in cosine distance from base?
