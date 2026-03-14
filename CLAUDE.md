@@ -1199,7 +1199,31 @@ not generated).  The ratio is computed on 11 variants, not a balanced 4×6 desig
 A balanced run with all 6 variants per family would give a more reliable estimate of
 which perturbation types are most disruptive.
 
-**Key open question:** What is the text of 0366?  If it is a short, ambiguous, domain-neutral
-prompt, the context_added variant's large distance (0.35) tells us the meaning was almost
-entirely carried by the added context rather than the base — a near-empty base prompt whose
-CLIP identity is context-determined.
+**0366 text identified:** A long MMLU econometrics question (omitted variable bias, four
+sub-clauses, A/B/C/D answer choices).  This resolves the earlier hypothesis that the base
+was "short or ambiguous" — it is neither.  The large within-family distance is better
+explained by prefix-content incoherence (see below).
+
+**Experiment design gap — perturbation templates mismatched to domain:**
+The perturbation prefixes (e.g. "Argue against the conventional wisdom:", "What if the
+common assumption is wrong?", "Leading experts agree this has a clear answer.") are
+adversarial/debate framings designed for opinion or knowledge-recall questions.  Applied
+to math word problems (0287, 0332) and formal MMLU questions (0101, 0366), they are
+semantically incoherent — these prompts have deterministic answers that cannot be argued
+against.  This is true for all four families but the collision is most severe for 0366:
+a long, multi-conditional technical argument already containing implicit answer structure
+(A/B/C/D), where the debate-framing prefix competes most strongly with the existing
+content.  The 0366 anomaly may reflect worst-case prefix interference rather than
+genuine sensitivity to pragmatic framing.
+
+**Consequence for interpretation:** The 2.71 between/within ratio still shows that
+variants cluster within family — that finding is robust.  But the *meaning* of each
+perturbation type is weakened: "sensitivity to authority_bias framing" conflates
+"responds to epistemic framing" with "responds to incoherent noise prepended to a
+deterministic problem."  A cleaner Exp 6 would use domain-appropriate perturbations
+(e.g. for math: paraphrase names/numbers, add irrelevant context, change surface form).
+
+**Status:** Not being re-run.  The CLIP-space clustering result is a curiosity baseline
+to compare against more grounded representational metrics being developed separately.
+The design gap is noted for if/when perturbation-sensitivity is revisited with those
+tools.
